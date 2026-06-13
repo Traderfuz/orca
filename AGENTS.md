@@ -44,3 +44,9 @@ Be mindful of the user's `gh` CLI API rate limit — batch requests where possib
 Never commit PR evidence images; attach them to the PR conversation instead (but never use gh-attach).
 
 ## Type Declarations: Prefer `.ts` Over `.d.ts`
+
+<!-- DEVOS_AUTO_START -->
+
+
+<!-- DEVOS_AUTO_END -->
+

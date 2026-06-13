@@ -38,7 +38,10 @@ const VERSIONED_ONNXRUNTIME_DYLIB_RE = /^libonnxruntime\.\d[\d.]*\.dylib$/
 
 const NODE_BUILTINS = new Set([
   ...builtinModules,
-  ...builtinModules.map((moduleName) => `node:${moduleName}`)
+  ...builtinModules.map((moduleName) => `node:${moduleName}`),
+  // node:sqlite was added in Node 22.5 (experimental) and is not yet in builtinModules
+  'node:sqlite',
+  'sqlite'
 ])
 
 function packageNameFromSpecifier(specifier) {
