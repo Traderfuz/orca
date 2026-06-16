@@ -13,9 +13,13 @@ import {
   getTerminalUrlOpenHint,
   installFilePathLinkClickFallback
 } from './terminal-link-handlers'
+import { createTerminalHandleLinkProvider } from './terminal-handle-links'
 import type { LinkHandlerDeps } from './terminal-link-handlers'
 import { handleOscLink } from './terminal-osc-link-routing'
-import { installHttpLinkClickFallback } from './terminal-url-link-hit-testing'
+import {
+  installHttpLinkClickFallback,
+  type TerminalLinkRoutingPreferenceRequester
+} from './terminal-url-link-hit-testing'
 import type {
   GlobalSettings,
   SetupSplitDirection,
@@ -92,6 +96,19 @@ function extractUncHost(value: string | undefined): string | null {
   return match?.[1] || null
 }
 
+function reportActiveRendererPtyForPane(
+  paneTransports: Map<number, PtyTransport>,
+  activePaneId: number | null
+): void {
+  for (const [paneId, transport] of paneTransports) {
+    const ptyId = transport.getPtyId()
+    if (!ptyId || ptyId.startsWith('remote:')) {
+      continue
+    }
+    window.api.pty.setActiveRendererPty?.(ptyId, activePaneId === paneId)
+  }
+}
+
 type UseTerminalPaneLifecycleDeps = {
   tabId: string
   worktreeId: string
@@ -119,6 +136,7 @@ type UseTerminalPaneLifecycleDeps = {
   systemPrefersDark: boolean
   settings: GlobalSettings | null | undefined
   settingsRef: React.RefObject<GlobalSettings | null | undefined>
+  requestOpenLinksInAppPreference: TerminalLinkRoutingPreferenceRequester
   /** Resolved Option-as-Alt value: `'auto'` has already been mapped to
    *  `'true' | 'false'` via the keyboard-layout probe. Passed separately
    *  from `settings` because the probe lives outside the settings store. */
@@ -161,6 +179,7 @@ type UseTerminalPaneLifecycleDeps = {
     terminalTitle?: string
     paneKey?: string
     agentStatusSnapshot?: ParsedAgentStatusPayload
+    suppressOsNotification?: boolean
   }) => void
   setCacheTimerStartedAt: (key: string, ts: number | null) => void
   syncPanePtyLayoutBinding: (paneId: number, ptyId: string | null) => void
@@ -307,6 +326,7 @@ export function useTerminalPaneLifecycle({
   systemPrefersDark,
   settings,
   settingsRef,
+  requestOpenLinksInAppPreference,
   effectiveMacOptionAsAlt,
   effectiveMacOptionAsAltRef,
   initialLayoutRef,
@@ -352,6 +372,7 @@ export function useTerminalPaneLifecycle({
   const systemPrefersDarkRef = useRef(systemPrefersDark)
   systemPrefersDarkRef.current = systemPrefersDark
   const linkProviderDisposablesRef = useRef(new Map<number, IDisposable>())
+  const terminalHandleLinkDisposablesRef = useRef(new Map<number, IDisposable>())
   const fileLinkClickFallbackDisposablesRef = useRef(new Map<number, IDisposable>())
   const httpLinkClickFallbackDisposablesRef = useRef(new Map<number, IDisposable>())
   // Why: read settingsRef at fire time so toggling "copy on select" takes
@@ -421,6 +442,7 @@ export function useTerminalPaneLifecycle({
     const paneTransports = paneTransportsRef.current
     const panePtyBindings = panePtyBindingsRef.current
     const linkDisposables = linkProviderDisposablesRef.current
+    const terminalHandleLinkDisposables = terminalHandleLinkDisposablesRef.current
     const fileLinkClickFallbackDisposables = fileLinkClickFallbackDisposablesRef.current
     const httpLinkClickFallbackDisposables = httpLinkClickFallbackDisposablesRef.current
     const selectionDisposables = selectionDisposablesRef.current
@@ -501,6 +523,8 @@ export function useTerminalPaneLifecycle({
       cwd,
       startup,
       paneTransportsRef,
+      paneMode2031Ref,
+      paneLastThemeModeRef,
       replayingPanesRef,
       isActiveRef,
       isVisibleRef,
@@ -662,16 +686,27 @@ export function useTerminalPaneLifecycle({
           createFilePathLinkProvider(pane.id, linkDeps, pane.linkTooltip, fileOpenLinkHint)
         )
         linkProviderDisposablesRef.current.set(pane.id, linkProviderDisposable)
+        const terminalHandleLinkDisposable = pane.terminal.registerLinkProvider(
+          createTerminalHandleLinkProvider({
+            getTerminal: () =>
+              managerRef.current?.getPanes().find((candidate) => candidate.id === pane.id)
+                ?.terminal ?? null,
+            getRuntimeEnvironmentId: () =>
+              linkDeps.getRuntimeEnvironmentIdForPane?.(pane.id) ?? null,
+            linkTooltip: pane.linkTooltip
+          })
+        )
+        terminalHandleLinkDisposablesRef.current.set(pane.id, terminalHandleLinkDisposable)
         const fileLinkClickFallbackDisposable = installFilePathLinkClickFallback(
           pane.id,
           pane.terminal,
           linkDeps
         )
         fileLinkClickFallbackDisposablesRef.current.set(pane.id, fileLinkClickFallbackDisposable)
-        const httpLinkClickFallbackDisposable = installHttpLinkClickFallback(
-          pane.terminal,
-          linkDeps
-        )
+        const httpLinkClickFallbackDisposable = installHttpLinkClickFallback(pane.terminal, {
+          ...linkDeps,
+          requestOpenLinksInAppPreference
+        })
         httpLinkClickFallbackDisposables.set(pane.id, httpLinkClickFallbackDisposable)
         // Why: skip empty selections so clicking to deselect doesn't clobber
         // whatever the user last copied elsewhere.
@@ -738,7 +773,8 @@ export function useTerminalPaneLifecycle({
           activate: (event, text) => {
             handleOscLink(text, event as MouseEvent | undefined, {
               ...linkDeps,
-              runtimeEnvironmentId: linkDeps.getRuntimeEnvironmentIdForPane?.(pane.id) ?? null
+              runtimeEnvironmentId: linkDeps.getRuntimeEnvironmentIdForPane?.(pane.id) ?? null,
+              requestOpenLinksInAppPreference
             })
             // Why: Cmd/Ctrl+clicking a link activates Orca handling (open file,
             // new browser tab, system browser) which can steal focus from the
@@ -798,6 +834,11 @@ export function useTerminalPaneLifecycle({
         if (linkProviderDisposable) {
           linkProviderDisposable.dispose()
           linkProviderDisposablesRef.current.delete(paneId)
+        }
+        const terminalHandleLinkDisposable = terminalHandleLinkDisposablesRef.current.get(paneId)
+        if (terminalHandleLinkDisposable) {
+          terminalHandleLinkDisposable.dispose()
+          terminalHandleLinkDisposablesRef.current.delete(paneId)
         }
         const fileLinkClickFallbackDisposable =
           fileLinkClickFallbackDisposablesRef.current.get(paneId)
@@ -910,6 +951,7 @@ export function useTerminalPaneLifecycle({
         // stay stuck on the closed pane's last title.
         const newActivePane = managerRef.current?.getActivePane()
         if (newActivePane) {
+          reportActiveRendererPtyForPane(paneTransportsRef.current, newActivePane.id)
           const paneTitles = useAppStore.getState().runtimePaneTitlesByTabId[tabId] ?? {}
           const activeTitle = paneTitles[newActivePane.id]
           if (activeTitle) {
@@ -923,6 +965,7 @@ export function useTerminalPaneLifecycle({
         if (shouldPersistLayout) {
           persistLayoutSnapshot()
         }
+        reportActiveRendererPtyForPane(paneTransportsRef.current, pane.id)
         // Why: when the user switches focus between split panes, update the
         // tab title to the newly active pane's last-known title so the tab
         // label reflects the focused agent — not a stale title from the
@@ -955,13 +998,15 @@ export function useTerminalPaneLifecycle({
       terminalOptions: () => {
         const currentSettings = settingsRef.current
         const terminalFontWeights = resolveTerminalFontWeights(currentSettings?.terminalFontWeight)
-        const cursorStyle = currentSettings?.terminalCursorStyle ?? 'bar'
+        const cursorStyle = currentSettings?.terminalCursorStyle ?? 'block'
         const storeState = useAppStore.getState()
         const currentTab = storeState.tabsByWorktree[worktreeId]?.find(
           (candidate) => candidate.id === tabId
         )
+        const platformInfo = window.api.platform?.get?.()
         const windowsPtyCompatibilityOptions = buildWindowsPtyCompatibilityOptions({
           userAgent: navigator.userAgent,
+          osRelease: platformInfo?.osRelease,
           connectionId: getConnectionId(worktreeId),
           cwd: startupCwd,
           shellOverride: currentTab?.shellOverride
@@ -996,7 +1041,8 @@ export function useTerminalPaneLifecycle({
           ...linkDeps,
           runtimeEnvironmentId: activePane
             ? (linkDeps.getRuntimeEnvironmentIdForPane?.(activePane.id) ?? null)
-            : null
+            : null,
+          requestOpenLinksInAppPreference
         })
         // Why: Cmd/Ctrl+click on a plain-text URL (WebLinksAddon) takes focus
         // away from the terminal before the click's mouseup reaches
@@ -1011,6 +1057,9 @@ export function useTerminalPaneLifecycle({
       // so PTYs survive navigation. Creating WebGL for those offscreen panes
       // still consumes Chromium's context budget and can blank visible panes.
       initialRenderingSuspended: !isVisibleRef.current,
+      // Why: remote-runtime panes honor the user GPU setting too — snapshots
+      // that arrive after WebGL attaches are handled by the post-replay
+      // rebuildPaneWebgl in pty-connection's replay callback.
       terminalGpuAcceleration: settingsRef.current?.terminalGpuAcceleration ?? 'auto',
       debugLabel: `tab:${tabId}/wt:${worktreeId}`
     })
@@ -1238,6 +1287,10 @@ export function useTerminalPaneLifecycle({
         disposable.dispose()
       }
       linkDisposables.clear()
+      for (const disposable of terminalHandleLinkDisposables.values()) {
+        disposable.dispose()
+      }
+      terminalHandleLinkDisposables.clear()
       for (const disposable of fileLinkClickFallbackDisposables.values()) {
         disposable.dispose()
       }

@@ -5,12 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const appStoreSnapshot: {
   activeTabId: string | null
-  activeTabType: 'terminal' | 'editor' | 'browser' | null
+  activeTabType: 'terminal' | 'editor' | 'browser' | 'simulator' | null
   activeRuntimeEnvironmentId: string | null
   repos: { id: string; connectionId?: string | null }[]
   worktreesByRepo: Record<string, { id: string; repoId: string }[]>
   unifiedTabsByWorktree: Record<string, unknown[]>
   activeGroupIdByWorktree: Record<string, string>
+  detectedAgentIds: string[] | null
+  remoteDetectedAgentIds: Record<string, string[]>
+  isDetectingAgents: boolean
+  isDetectingRemoteAgents: Record<string, boolean>
 } = {
   activeTabId: null,
   activeTabType: null,
@@ -18,7 +22,11 @@ const appStoreSnapshot: {
   repos: [],
   worktreesByRepo: {},
   unifiedTabsByWorktree: {},
-  activeGroupIdByWorktree: {}
+  activeGroupIdByWorktree: {},
+  detectedAgentIds: null,
+  remoteDetectedAgentIds: {},
+  isDetectingAgents: false,
+  isDetectingRemoteAgents: {}
 }
 const pinTabMock: (tabId: string) => void = vi.fn()
 const unpinTabMock: (tabId: string) => void = vi.fn()
@@ -27,12 +35,16 @@ const useAppStoreMock = vi.fn(
   (
     selector: (state: {
       activeTabId: string | null
-      activeTabType: 'terminal' | 'editor' | 'browser' | null
+      activeTabType: 'terminal' | 'editor' | 'browser' | 'simulator' | null
       gitStatusByWorktree: Record<string, never[]>
       repos: { id: string; connectionId?: string | null }[]
       worktreesByRepo: Record<string, { id: string; repoId: string }[]>
       unifiedTabsByWorktree: Record<string, unknown[]>
       activeGroupIdByWorktree: Record<string, string>
+      detectedAgentIds: string[] | null
+      remoteDetectedAgentIds: Record<string, string[]>
+      isDetectingAgents: boolean
+      isDetectingRemoteAgents: Record<string, boolean>
       pinTab: typeof pinTabMock
       unpinTab: typeof unpinTabMock
       settings: {
@@ -50,6 +62,10 @@ const useAppStoreMock = vi.fn(
       worktreesByRepo: appStoreSnapshot.worktreesByRepo,
       unifiedTabsByWorktree: appStoreSnapshot.unifiedTabsByWorktree,
       activeGroupIdByWorktree: appStoreSnapshot.activeGroupIdByWorktree,
+      detectedAgentIds: appStoreSnapshot.detectedAgentIds,
+      remoteDetectedAgentIds: appStoreSnapshot.remoteDetectedAgentIds,
+      isDetectingAgents: appStoreSnapshot.isDetectingAgents,
+      isDetectingRemoteAgents: appStoreSnapshot.isDetectingRemoteAgents,
       pinTab: pinTabMock,
       unpinTab: unpinTabMock,
       settings: {
@@ -67,6 +83,7 @@ vi.mock('react', async () => {
     memo: <T>(component: T) => component,
     useEffect: () => {},
     useLayoutEffect: () => {},
+    useCallback: <T extends (...args: never[]) => unknown>(callback: T) => callback,
     useMemo: <T>(factory: () => T) => factory(),
     useRef: <T>(current: T) => ({ current }),
     useState: <T>(initial: T | (() => T)) => {
@@ -107,6 +124,10 @@ useAppStoreExport.getState = vi.fn(() => ({
   worktreesByRepo: appStoreSnapshot.worktreesByRepo,
   unifiedTabsByWorktree: appStoreSnapshot.unifiedTabsByWorktree,
   activeGroupIdByWorktree: appStoreSnapshot.activeGroupIdByWorktree,
+  detectedAgentIds: appStoreSnapshot.detectedAgentIds,
+  remoteDetectedAgentIds: appStoreSnapshot.remoteDetectedAgentIds,
+  isDetectingAgents: appStoreSnapshot.isDetectingAgents,
+  isDetectingRemoteAgents: appStoreSnapshot.isDetectingRemoteAgents,
   pinTab: pinTabMock,
   unpinTab: unpinTabMock,
   settings: {

@@ -19,6 +19,7 @@ import type {
   GitHubWorkItem,
   GitHubPullRequestStateUpdate,
   GitHubRerunPRChecksResult,
+  GitHubPRMergeMethod,
   GitHubPRMergeMethodSettings
 } from '../../shared/types'
 import type { CreateHostedReviewInput, CreateHostedReviewResult } from '../../shared/hosted-review'
@@ -111,6 +112,7 @@ const MERGE_QUEUE_UNKNOWN_CACHE_TTL_MS = 60 * 1000
 const MERGE_QUEUE_CACHE_MAX_ENTRIES = 256
 type GitHubRepositoryMergeMetadata = {
   mergeQueueRequired: boolean | null
+  autoMergeAllowed: boolean | null
   mergeMethodSettings?: GitHubPRMergeMethodSettings
 }
 const repositoryMergeMetadataCache = new Map<
@@ -257,11 +259,22 @@ function sanitizeRemoteName(owner: string, repo: string): string {
   return slug ? `pr-${slug}` : 'pr-head'
 }
 
+/**
+ * A fork push target plus the PR's `maintainer_can_modify` flag. The flag rides
+ * alongside the target (rather than inside {@link GitPushTarget}) so it never
+ * leaks into the persisted, validated push-target shape.
+ */
+export type PullRequestPushTarget = {
+  pushTarget: GitPushTarget
+  /** false when the PR has "Allow edits from maintainers" off; a push may be rejected. */
+  maintainerCanModify?: boolean
+}
+
 export async function getPullRequestPushTarget(
   repoPath: string,
   prNumber: number,
   connectionId?: string | null
-): Promise<GitPushTarget | null> {
+): Promise<PullRequestPushTarget | null> {
   const context = githubRepoContext(repoPath, connectionId)
   const ghOptions = ghRepoExecOptions(context)
   const { candidates } = await resolvePRRepositoryCandidates(repoPath, connectionId)
@@ -297,6 +310,7 @@ export async function getPullRequestPushTarget(
     }
     const origin = await getOwnerRepoForRemote(repoPath, 'origin', connectionId)
     const pr = JSON.parse(prStdout) as {
+      maintainer_can_modify?: boolean
       head?: {
         ref?: string
         repo?: {
@@ -314,6 +328,8 @@ export async function getPullRequestPushTarget(
     const repo = headRepo?.name?.trim() ?? headRepo?.full_name?.split('/')[1]?.trim()
     const cloneUrl = headRepo?.clone_url?.trim()
     const sshUrl = headRepo?.ssh_url?.trim()
+    const maintainerCanModify =
+      typeof pr.maintainer_can_modify === 'boolean' ? pr.maintainer_can_modify : undefined
     if (!owner || !repo || !branchName || !cloneUrl || !sshUrl) {
       return null
     }
@@ -322,7 +338,10 @@ export async function getPullRequestPushTarget(
       origin.owner.toLowerCase() === owner.toLowerCase() &&
       origin.repo.toLowerCase() === repo.toLowerCase()
     ) {
-      return { remoteName: 'origin', branchName }
+      return {
+        pushTarget: { remoteName: 'origin', branchName },
+        ...(maintainerCanModify !== undefined ? { maintainerCanModify } : {})
+      }
     }
 
     let originUrl: string | null = null
@@ -335,9 +354,12 @@ export async function getPullRequestPushTarget(
       originUrl = null
     }
     return {
-      remoteName: sanitizeRemoteName(owner, repo),
-      branchName,
-      remoteUrl: pickPushRemoteUrl({ originUrl, cloneUrl, sshUrl })
+      pushTarget: {
+        remoteName: sanitizeRemoteName(owner, repo),
+        branchName,
+        remoteUrl: pickPushRemoteUrl({ originUrl, cloneUrl, sshUrl })
+      },
+      ...(maintainerCanModify !== undefined ? { maintainerCanModify } : {})
     }
   } finally {
     release()
@@ -732,7 +754,7 @@ function mapPullRequestWorkItem(
   }
 }
 
-async function hydrateWorkItemMergeMethodSettings(
+async function hydrateWorkItemRepositoryMergeMetadata(
   items: MainWorkItem[],
   ownerRepo: OwnerRepo | null,
   ghOptions: GhExecOptions
@@ -744,11 +766,21 @@ async function hydrateWorkItemMergeMethodSettings(
   // Why: merge method settings are repository-level, so one cached metadata
   // probe can keep Tasks rows accurate without per-PR GraphQL fan-out.
   const mergeMetadata = await detectRepositoryMergeMetadata(ownerRepo, undefined, ghOptions)
-  if (!mergeMetadata.mergeMethodSettings) {
+  if (!mergeMetadata.mergeMethodSettings && mergeMetadata.autoMergeAllowed === null) {
     return items
   }
   return items.map((item) =>
-    item.type === 'pr' ? { ...item, mergeMethodSettings: mergeMetadata.mergeMethodSettings } : item
+    item.type === 'pr'
+      ? {
+          ...item,
+          ...(mergeMetadata.autoMergeAllowed !== null
+            ? { autoMergeAllowed: mergeMetadata.autoMergeAllowed }
+            : {}),
+          ...(mergeMetadata.mergeMethodSettings
+            ? { mergeMethodSettings: mergeMetadata.mergeMethodSettings }
+            : {})
+        }
+      : item
   )
 }
 
@@ -806,6 +838,9 @@ async function fetchPullRequestWorkItem(
       return {
         ...mapped,
         mergeQueueRequired: mergeMetadata.mergeQueueRequired,
+        ...(mergeMetadata.autoMergeAllowed !== null
+          ? { autoMergeAllowed: mergeMetadata.autoMergeAllowed }
+          : {}),
         ...(mergeMetadata.mergeMethodSettings
           ? { mergeMethodSettings: mergeMetadata.mergeMethodSettings }
           : {})
@@ -916,6 +951,26 @@ function assertSshRepoHasResolvedGitHubSource(args: {
   throw new Error(GITHUB_WORK_ITEMS_SSH_REMOTE_REQUIRED_MESSAGE)
 }
 
+type ResolvedPrWorkItemSource = {
+  source: OwnerRepo | null
+  originCandidate: OwnerRepo | null
+  upstreamCandidate: OwnerRepo | null
+}
+
+async function resolvePrWorkItemSource(
+  repoPath: string,
+  preference: IssueSourcePreference | undefined,
+  connectionId?: string | null
+): Promise<ResolvedPrWorkItemSource> {
+  const [originCandidate, upstreamCandidate] = await Promise.all([
+    getOwnerRepo(repoPath, connectionId),
+    getOwnerRepoForRemote(repoPath, 'upstream', connectionId)
+  ])
+  const source =
+    preference === 'upstream' ? (upstreamCandidate ?? originCandidate) : originCandidate
+  return { source, originCandidate, upstreamCandidate }
+}
+
 async function listRecentWorkItems(
   repoPath: string,
   issueOwnerRepo: OwnerRepo | null,
@@ -1005,7 +1060,7 @@ async function listRecentWorkItems(
       prs = (JSON.parse(prsSettled.value.stdout) as Record<string, unknown>[]).map((item) =>
         mapPullRequestWorkItem(item, prOwnerRepo)
       )
-      prs = await hydrateWorkItemMergeMethodSettings(prs, prOwnerRepo, ghOptions)
+      prs = await hydrateWorkItemRepositoryMergeMetadata(prs, prOwnerRepo, ghOptions)
     } else {
       // Why: PR-side failures must preserve the pre-diff behavior of
       // Promise.all by re-throwing so the rejection propagates up through
@@ -1147,7 +1202,7 @@ async function listQueriedWorkItems(
       const mapped = (JSON.parse(stdout) as Record<string, unknown>[]).map((item) =>
         mapPullRequestWorkItem(item, prOwnerRepo)
       )
-      const hydrated = await hydrateWorkItemMergeMethodSettings(mapped, prOwnerRepo, ghOptions)
+      const hydrated = await hydrateWorkItemRepositoryMergeMetadata(mapped, prOwnerRepo, ghOptions)
       if (query.state === 'closed') {
         return hydrated.filter((item) => item.state !== 'merged')
       }
@@ -1174,17 +1229,12 @@ export async function listWorkItems(
   connectionId?: string | null,
   noCache?: boolean
 ): Promise<ListWorkItemsResult<MainWorkItem>> {
-  // Why: resolve the raw upstream candidate alongside the preference-aware
-  // issue source. The selector needs to know whether an upstream remote
-  // *exists* to decide whether to render — independent of whether the user
-  // has picked 'origin' (which would otherwise make `sources.issues` equal
-  // origin and hide the selector permanently).
-  const [issueResolved, prOwnerRepo, upstreamCandidate] = await Promise.all([
+  const [issueResolved, prResolved] = await Promise.all([
     resolveIssueSource(repoPath, preference, connectionId),
-    getOwnerRepo(repoPath, connectionId),
-    getOwnerRepoForRemote(repoPath, 'upstream', connectionId)
+    resolvePrWorkItemSource(repoPath, preference, connectionId)
   ])
   const issueOwnerRepo = issueResolved.source
+  const prOwnerRepo = prResolved.source
   const trimmedQuery = query?.trim() ?? ''
   await acquire()
   try {
@@ -1217,7 +1267,8 @@ export async function listWorkItems(
       sources: {
         issues: issueOwnerRepo,
         prs: prOwnerRepo,
-        upstreamCandidate: upstreamCandidate ?? null
+        originCandidate: prResolved.originCandidate,
+        upstreamCandidate: prResolved.upstreamCandidate
       },
       ...(errors ? { errors } : {}),
       ...(issueResolved.fellBack ? { issueSourceFellBack: true } : {})
@@ -1332,11 +1383,12 @@ export async function countWorkItems(
   preference?: IssueSourcePreference,
   connectionId?: string | null
 ): Promise<number> {
-  const [issueResolved, prOwnerRepo] = await Promise.all([
+  const [issueResolved, prResolved] = await Promise.all([
     resolveIssueSource(repoPath, preference, connectionId),
-    getOwnerRepo(repoPath, connectionId)
+    resolvePrWorkItemSource(repoPath, preference, connectionId)
   ])
   const issueOwnerRepo = issueResolved.source
+  const prOwnerRepo = prResolved.source
   const ownerRepo = prOwnerRepo ?? issueOwnerRepo
   if (!ownerRepo) {
     return 0
@@ -1810,6 +1862,7 @@ type PullRequestLookupData = {
   reviewDecision?: PRReviewDecision | null
   autoMergeRequest?: unknown
   autoMergeEnabled?: boolean
+  autoMergeAllowed?: boolean | null
   mergeQueueRequired?: boolean | null
   mergeMethodSettings?: GitHubPRMergeMethodSettings
   mergeStateStatus?: string | null
@@ -1918,7 +1971,7 @@ async function detectRepositoryMergeMetadata(
   }
   const guard = rateLimitGuard('graphql')
   if (guard.blocked) {
-    return { mergeQueueRequired: null }
+    return { mergeQueueRequired: null, autoMergeAllowed: null }
   }
   const query = branchName
     ? `query($owner: String!, $repo: String!, $branch: String!) {
@@ -1927,6 +1980,7 @@ async function detectRepositoryMergeMetadata(
       mergeCommitAllowed
       rebaseMergeAllowed
       squashMergeAllowed
+      autoMergeAllowed
       mergeQueue(branch: $branch) { id }
     }
   }`
@@ -1936,6 +1990,7 @@ async function detectRepositoryMergeMetadata(
       mergeCommitAllowed
       rebaseMergeAllowed
       squashMergeAllowed
+      autoMergeAllowed
     }
   }`
   try {
@@ -1961,6 +2016,7 @@ async function detectRepositoryMergeMetadata(
           mergeCommitAllowed?: unknown
           rebaseMergeAllowed?: unknown
           squashMergeAllowed?: unknown
+          autoMergeAllowed?: unknown
           mergeQueue?: { id?: unknown } | null
         } | null
       }
@@ -1976,6 +2032,8 @@ async function detectRepositoryMergeMetadata(
       : undefined
     const value: GitHubRepositoryMergeMetadata = {
       mergeQueueRequired: branchName ? Boolean(repository?.mergeQueue) : null,
+      autoMergeAllowed:
+        typeof repository?.autoMergeAllowed === 'boolean' ? repository.autoMergeAllowed : null,
       ...(mergeMethodSettings ? { mergeMethodSettings } : {})
     }
     cacheRepositoryMergeMetadata(cacheKey, value, MERGE_QUEUE_CACHE_TTL_MS)
@@ -1983,7 +2041,10 @@ async function detectRepositoryMergeMetadata(
   } catch {
     // Why: failed merge-queue probes should stay conservative without
     // retrying GraphQL on every status poll while GitHub/network is unhappy.
-    const value: GitHubRepositoryMergeMetadata = { mergeQueueRequired: null }
+    const value: GitHubRepositoryMergeMetadata = {
+      mergeQueueRequired: null,
+      autoMergeAllowed: null
+    }
     cacheRepositoryMergeMetadata(cacheKey, value, MERGE_QUEUE_UNKNOWN_CACHE_TTL_MS)
     return value
   }
@@ -2003,6 +2064,7 @@ async function hydratePullRequestLookupData(
   return {
     ...normalized,
     ...(mergeMetadata ? { mergeQueueRequired: mergeMetadata.mergeQueueRequired } : {}),
+    ...(mergeMetadata ? { autoMergeAllowed: mergeMetadata.autoMergeAllowed } : {}),
     ...(mergeMetadata?.mergeMethodSettings
       ? { mergeMethodSettings: mergeMetadata.mergeMethodSettings }
       : {})
@@ -2397,6 +2459,7 @@ export async function getPRForBranchOutcome(
         mergeable,
         ...(data.reviewDecision !== undefined ? { reviewDecision: data.reviewDecision } : {}),
         ...(data.autoMergeEnabled !== undefined ? { autoMergeEnabled: data.autoMergeEnabled } : {}),
+        ...(data.autoMergeAllowed !== undefined ? { autoMergeAllowed: data.autoMergeAllowed } : {}),
         ...(data.mergeQueueRequired !== undefined
           ? { mergeQueueRequired: data.mergeQueueRequired }
           : {}),
@@ -3386,6 +3449,7 @@ export async function setPRAutoMerge(
   repoPath: string,
   prNumber: number,
   enabled: boolean,
+  method: GitHubPRMergeMethod = 'squash',
   connectionId?: string | null,
   prRepo?: OwnerRepo | null
 ): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -3394,6 +3458,9 @@ export async function setPRAutoMerge(
   await acquire()
   try {
     const args = ['pr', 'merge', String(prNumber), enabled ? '--auto' : '--disable-auto']
+    if (enabled) {
+      args.push(`--${method}`)
+    }
     if (ownerRepo) {
       args.push('--repo', `${ownerRepo.owner}/${ownerRepo.repo}`)
     }

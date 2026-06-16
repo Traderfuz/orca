@@ -9,6 +9,7 @@ import {
   buildWorkspaceSessionPayload,
   shouldPersistWorkspaceSession
 } from '@/lib/workspace-session'
+import { persistWorkspaceSessionByHostSync } from '@/lib/workspace-session-host-persistence'
 import { findWorktreeById } from '@/store/slices/worktree-helpers'
 import { writeRuntimeFile } from '@/runtime/runtime-file-client'
 import { settingsForRuntimeOwner } from '@/runtime/runtime-rpc-client'
@@ -89,7 +90,7 @@ export function attachEditorAutosaveController(store: AppStoreApi): () => void {
         // round-tripping back into a setContent that jumps the cursor to the
         // end (and, under round-trip drift, can drop keystrokes typed in the
         // debounce window). See editor-self-write-registry.
-        recordSelfWrite(liveFile.filePath, contentToSave)
+        recordSelfWrite(liveFile.filePath, contentToSave, liveFile.runtimeEnvironmentId)
         try {
           await writeRuntimeFile(
             {
@@ -105,7 +106,7 @@ export function attachEditorAutosaveController(store: AppStoreApi): () => void {
           // Why: the self-write stamp is only valid if a disk write actually
           // happened. Clearing it on failure keeps the external watcher from
           // suppressing a real third-party update that lands during the TTL.
-          clearSelfWrite(liveFile.filePath)
+          clearSelfWrite(liveFile.filePath, liveFile.runtimeEnvironmentId)
           throw error
         }
 
@@ -285,7 +286,13 @@ export function attachEditorAutosaveController(store: AppStoreApi): () => void {
       // Why: restart/update may quit before the debounced session writer fires.
       // Write the full session now so dirty drafts restore as unsaved tabs.
       if (shouldPersistWorkspaceSession(state)) {
-        window.api.session.setSync(buildWorkspaceSessionPayload(state))
+        // Why: runtime-owned worktree slices persist under their host
+        // partition, mirroring the debounced writer's split.
+        persistWorkspaceSessionByHostSync(
+          window.api.session,
+          buildWorkspaceSessionPayload(state),
+          state
+        )
       }
       detail.resolve()
     } catch (error) {

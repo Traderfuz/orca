@@ -8,9 +8,15 @@ import type {
   TerminalTab,
   TuiAgent,
   Worktree,
+  WorkspaceKey,
   WorkspaceSessionState
 } from '../../../../shared/types'
 import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
+import {
+  folderWorkspaceKey,
+  parseWorkspaceKey,
+  worktreeWorkspaceKey
+} from '../../../../shared/workspace-scope'
 import { deriveGeneratedTabTitle } from '../../../../shared/agent-tab-title'
 import { parseLegacyNumericPaneKey, parsePaneKey } from '../../../../shared/stable-pane-id'
 import { isValidHostTerminalTabId, isValidTerminalTabId } from '../../../../shared/terminal-tab-id'
@@ -35,13 +41,15 @@ import {
 } from '@/components/terminal-pane/pty-transport'
 import { normalizeTerminalLayoutSnapshot } from '@/components/terminal-pane/terminal-layout-leaf-ids'
 import { shutdownBufferCaptures } from '@/components/terminal-pane/shutdown-buffer-captures'
-import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
+import { callRuntimeRpc } from '@/runtime/runtime-rpc-client'
 import { parseRemoteRuntimePtyId } from '@/runtime/runtime-terminal-stream'
 import { toRuntimeWorktreeSelector } from '@/runtime/runtime-worktree-selector'
 import { createBrowserUuid } from '@/lib/browser-uuid'
+import { getFolderWorkspaceConnectionId } from '@/lib/folder-workspace-connection'
 import { hasWorktreeSleepIntent } from '@/lib/worktree-sleep-intent'
 import { sanitizeTerminalLayoutPaneTitles } from '@/lib/terminal-pane-title-sanitization'
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
+import { getRuntimeEnvironmentIdForWorktree } from '@/lib/worktree-runtime-owner'
 
 function getNextTerminalOrdinal(tabs: TerminalTab[]): number {
   const usedOrdinals = new Set<number>()
@@ -84,6 +92,7 @@ function consumePendingActivationSpawn(
 function getFallbackTabTitle(tab: TerminalTab, index?: number): string {
   return (
     tab.customTitle?.trim() ||
+    tab.quickCommandLabel?.trim() ||
     tab.defaultTitle?.trim() ||
     tab.title ||
     `Terminal ${(index ?? 0) + 1}`
@@ -122,6 +131,24 @@ function updateUnifiedTerminalLabel(
     return null
   }
   return unifiedTabs.map((entry, index) => (index === unifiedIndex ? { ...entry, label } : entry))
+}
+
+function getDecorativeAgentTitleSignature(title: string): string | null {
+  const status = detectAgentStatusFromTitle(title)
+  if (!status) {
+    return null
+  }
+  // Why: agent spinners can emit OSC title frames many times per second; the
+  // spinner glyph is live decoration, not meaningful tab or sort state.
+  return `${status}:${title
+    .trim()
+    .replace(/^[\u2800-\u28ff\s]+/u, '')
+    .replace(/\s+/g, ' ')}`
+}
+
+function isDecorativeAgentTitleFrameChange(prevTitle: string, nextTitle: string): boolean {
+  const prevSignature = getDecorativeAgentTitleSignature(prevTitle)
+  return prevSignature !== null && prevSignature === getDecorativeAgentTitleSignature(nextTitle)
 }
 
 function updateUnifiedTerminalGeneratedLabel(
@@ -170,9 +197,16 @@ function resolveCreatedTabShellOverride(
 }
 
 function worktreeUsesWslPath(
-  state: Pick<AppState, 'worktreesByRepo'>,
+  state: Pick<AppState, 'folderWorkspaces' | 'worktreesByRepo'>,
   worktreeId: string
 ): boolean {
+  const parsed = parseWorkspaceKey(worktreeId)
+  if (parsed?.type === 'folder') {
+    const folderWorkspace = state.folderWorkspaces.find(
+      (workspace) => workspace.id === parsed.folderWorkspaceId
+    )
+    return folderWorkspace ? isWslUncPath(folderWorkspace.folderPath) : false
+  }
   const worktree = Object.values(state.worktreesByRepo)
     .flat()
     .find((entry) => entry.id === worktreeId)
@@ -180,9 +214,13 @@ function worktreeUsesWslPath(
 }
 
 export function worktreeUsesRemoteConnection(
-  state: Pick<AppState, 'repos' | 'worktreesByRepo'>,
+  state: Pick<AppState, 'folderWorkspaces' | 'projectGroups' | 'repos' | 'worktreesByRepo'>,
   worktreeId: string
 ): boolean {
+  const parsedWorkspaceKey = parseWorkspaceKey(worktreeId)
+  if (parsedWorkspaceKey?.type === 'folder') {
+    return Boolean(getFolderWorkspaceConnectionId(state, parsedWorkspaceKey.folderWorkspaceId))
+  }
   const directRepoId = getRepoIdFromWorktreeId(worktreeId)
   const directRepo = state.repos.find((repo) => repo.id === directRepoId)
   if (directRepo) {
@@ -194,6 +232,13 @@ export function worktreeUsesRemoteConnection(
     .find((entry) => entry.id === worktreeId)
   const repo = worktree ? state.repos.find((entry) => entry.id === worktree.repoId) : null
   return Boolean(repo?.connectionId)
+}
+
+function resolveTerminalStopRuntimeEnvironmentId(
+  state: Pick<AppState, 'repos' | 'settings' | 'worktreesByRepo'>,
+  worktreeId: string
+): string | null {
+  return getRuntimeEnvironmentIdForWorktree(state, worktreeId)
 }
 
 export type TerminalSlice = {
@@ -216,6 +261,9 @@ export type TerminalSlice = {
    *  than unreadTerminalTabs and clears when the user interacts with the exact
    *  pane that raised attention. */
   unreadTerminalPanes: Record<string, true>
+  /** Agent-completion source marker for focus-return auto-ack. Kept separate
+   *  from unreadTerminalPanes so generic terminal bells still show until interact. */
+  unreadAgentCompletionPanes: Record<string, true>
   suppressedPtyExitIds: Record<string, true>
   pendingCodexPaneRestartIds: Record<string, true>
   codexRestartNoticeByPtyId: Record<
@@ -315,6 +363,7 @@ export type TerminalSlice = {
       /** Coding-harness agent being launched in this tab, recorded so the tab
        *  bar can show the provider icon before the agent's first hook event. */
       launchAgent?: TuiAgent
+      quickCommandLabel?: string | null
     }
   ) => TerminalTab
   openNewTerminalTabInActiveWorkspace: (groupId: string) => Promise<void>
@@ -335,6 +384,7 @@ export type TerminalSlice = {
    *  so a flag would never clear naturally. */
   markTerminalTabUnread: (tabId: string) => void
   markTerminalPaneUnread: (paneKey: string) => void
+  markAgentCompletionPaneUnread: (paneKey: string) => void
   /** Clear a tab's unread indicator. Called on user interaction with the
    *  pane (keystroke, click) — matches ghostty's "show until interact"
    *  model where the bell stays visible until the user engages with the
@@ -351,7 +401,7 @@ export type TerminalSlice = {
   clearTabPtyId: (tabId: string, ptyId?: string) => void
   shutdownWorktreeTerminals: (
     worktreeId: string,
-    opts?: { keepIdentifiers?: boolean }
+    opts?: { keepIdentifiers?: boolean; sleepingPaneKeys?: string[] }
   ) => Promise<void>
   suppressPtyExit: (ptyId: string) => void
   consumeSuppressedPtyExit: (ptyId: string) => boolean
@@ -396,6 +446,10 @@ export type TerminalSlice = {
    *  independently. null means no active timer for that pane. */
   cacheTimerByKey: Record<string, number | null>
   setCacheTimerStartedAt: (key: string, ts: number | null) => void
+  /** Wall-clock user input markers keyed by paneKey. Hibernation uses these to
+   *  avoid sleeping a completed agent pane that the user has turned into a shell. */
+  lastTerminalInputAtByPaneKey: Record<string, number>
+  recordTerminalInput: (paneKey: string, timestamp?: number) => void
   /** Scan all tabs and seed cache timers for any idle Claude sessions that don't
    *  already have a timer. Called when the feature is enabled mid-session. */
   seedCacheTimersForIdleTabs: () => void
@@ -422,6 +476,7 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
   runtimePaneTitlesByTabId: {},
   unreadTerminalTabs: {},
   unreadTerminalPanes: {},
+  unreadAgentCompletionPanes: {},
   suppressedPtyExitIds: {},
   pendingCodexPaneRestartIds: {},
   codexRestartNoticeByPtyId: {},
@@ -459,6 +514,7 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
   deferredSshReconnectTargets: [],
   deferredSshSessionIdsByTabId: {},
   cacheTimerByKey: {},
+  lastTerminalInputAtByPaneKey: {},
   recentQuickCommandIdByGroup: {},
 
   setRecentQuickCommandForGroup: (groupId, quickCommandId) => {
@@ -466,6 +522,18 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
       recentQuickCommandIdByGroup: {
         ...s.recentQuickCommandIdByGroup,
         [groupId]: quickCommandId
+      }
+    }))
+  },
+
+  recordTerminalInput: (paneKey, timestamp = Date.now()) => {
+    if (!paneKey || !Number.isFinite(timestamp)) {
+      return
+    }
+    set((s) => ({
+      lastTerminalInputAtByPaneKey: {
+        ...s.lastTerminalInputAtByPaneKey,
+        [paneKey]: timestamp
       }
     }))
   },
@@ -573,6 +641,7 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
       const shouldActivate = options?.activate !== false
       const nextOrdinal = getNextTerminalOrdinal(existing)
       const defaultTitle = `Terminal ${nextOrdinal}`
+      const quickCommandLabel = options?.quickCommandLabel?.trim()
       const createdShellOverride = resolveCreatedTabShellOverride(
         shellOverride,
         s.settings?.terminalWindowsShell,
@@ -595,6 +664,7 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
         // keeps a lone fresh terminal at "Terminal 1" after older tabs close.
         title: defaultTitle,
         defaultTitle,
+        ...(quickCommandLabel ? { quickCommandLabel } : {}),
         customTitle: null,
         color: null,
         sortOrder: existing.length,
@@ -632,6 +702,36 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
         id,
         'terminal'
       )
+      const groupsForWorktree = groupsByWorktree[worktreeId] ?? []
+      const cleanedGroups =
+        orphanTerminalIds.size === 0
+          ? groupsForWorktree
+          : groupsForWorktree.map((entry) => {
+              // Why: orphan cleanup must repair every group before adding the
+              // new tab, or inactive/background creation can revive stale focus.
+              const tabOrder = dedupeTabOrder(entry.tabOrder).filter(
+                (tabId) => !orphanTerminalIds.has(tabId)
+              )
+              const recentTabIds = sanitizeRecentTabIds(entry.recentTabIds, tabOrder)
+              const replacedActiveTabId = Boolean(
+                entry.activeTabId && orphanTerminalIds.has(entry.activeTabId)
+              )
+              const fallbackActiveTabId = recentTabIds.at(-1) ?? tabOrder[0] ?? null
+              const activeTabId = replacedActiveTabId ? fallbackActiveTabId : entry.activeTabId
+              return {
+                ...entry,
+                activeTabId,
+                tabOrder,
+                recentTabIds:
+                  replacedActiveTabId && activeTabId
+                    ? pushRecentTabId(recentTabIds, activeTabId)
+                    : recentTabIds
+              }
+            })
+      const cleanedTargetGroup = cleanedGroups.find((entry) => entry.id === group.id) ?? group
+      const cleanedGroupOrder = dedupeTabOrder(cleanedTargetGroup.tabOrder).filter(
+        (tabId) => !orphanTerminalIds.has(tabId)
+      )
       const unifiedTab = existingTerminalTab ?? {
         id,
         entityId: id,
@@ -639,18 +739,26 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
         worktreeId,
         contentType: 'terminal' as const,
         label: tab.title,
+        ...(tab.quickCommandLabel?.trim()
+          ? { quickCommandLabel: tab.quickCommandLabel.trim() }
+          : {}),
         customLabel: tab.customTitle,
         color: tab.color,
-        sortOrder: dedupeTabOrder(group.tabOrder).length,
+        sortOrder: cleanedGroupOrder.length,
         createdAt: tab.createdAt
       }
-      const nextGroupOrder = dedupeTabOrder([...group.tabOrder, unifiedTab.id])
+      const nextGroupOrder = dedupeTabOrder([...cleanedGroupOrder, unifiedTab.id])
       const nextRecent = shouldActivate
         ? pushRecentTabId(sanitizeRecentTabIds(group.recentTabIds, nextGroupOrder), unifiedTab.id)
-        : sanitizeRecentTabIds(group.recentTabIds, nextGroupOrder)
+        : sanitizeRecentTabIds(cleanedTargetGroup.recentTabIds, nextGroupOrder)
+      const cleanedActiveTabIdForWorktree = orphanCleanupPatch.activeTabIdByWorktree[worktreeId]
+      const cleanedGroupActiveTabId =
+        cleanedTargetGroup.activeTabId && !orphanTerminalIds.has(cleanedTargetGroup.activeTabId)
+          ? cleanedTargetGroup.activeTabId
+          : null
       const nextActiveTabIdForWorktree = shouldActivate
         ? tab.id
-        : (s.activeTabIdByWorktree[worktreeId] ?? group.activeTabId ?? tab.id)
+        : (cleanedActiveTabIdForWorktree ?? cleanedGroupActiveTabId ?? tab.id)
       return {
         ...orphanCleanupPatch,
         tabsByWorktree: {
@@ -668,9 +776,11 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
         },
         groupsByWorktree: {
           ...groupsByWorktree,
-          [worktreeId]: updateGroup(groupsByWorktree[worktreeId] ?? [], {
-            ...group,
-            activeTabId: shouldActivate ? unifiedTab.id : (group.activeTabId ?? unifiedTab.id),
+          [worktreeId]: updateGroup(cleanedGroups, {
+            ...cleanedTargetGroup,
+            activeTabId: shouldActivate
+              ? unifiedTab.id
+              : (cleanedGroupActiveTabId ?? unifiedTab.id),
             tabOrder: nextGroupOrder,
             recentTabIds: nextRecent
           })
@@ -680,17 +790,17 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
           ...s.layoutByWorktree,
           [worktreeId]: s.layoutByWorktree[worktreeId] ?? { type: 'leaf', groupId: group.id }
         },
-        activeTabId: shouldActivate ? tab.id : s.activeTabId,
+        activeTabId: shouldActivate ? tab.id : orphanCleanupPatch.activeTabId,
         activeTabIdByWorktree: {
-          ...s.activeTabIdByWorktree,
+          ...orphanCleanupPatch.activeTabIdByWorktree,
           [worktreeId]: nextActiveTabIdForWorktree
         },
         ptyIdsByTabId: {
-          ...s.ptyIdsByTabId,
+          ...orphanCleanupPatch.ptyIdsByTabId,
           [tab.id]: options?.initialPtyId ? [options.initialPtyId] : []
         },
         terminalLayoutsByTabId: {
-          ...s.terminalLayoutsByTabId,
+          ...orphanCleanupPatch.terminalLayoutsByTabId,
           [tab.id]: emptyLayoutSnapshot()
         }
       }
@@ -709,15 +819,12 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
     if (!worktreeId) {
       return
     }
-    const pairedWebRuntimeEnvironmentId = (globalThis as { __ORCA_WEB_CLIENT__?: boolean })
-      .__ORCA_WEB_CLIENT__
-      ? state.settings?.activeRuntimeEnvironmentId?.trim()
-      : null
-    if (pairedWebRuntimeEnvironmentId) {
+    const runtimeEnvironmentId = getRuntimeEnvironmentIdForWorktree(state, worktreeId)
+    if (runtimeEnvironmentId) {
       const { createWebRuntimeSessionTerminal } = await import('@/runtime/web-runtime-session')
       await createWebRuntimeSessionTerminal({
         worktreeId,
-        environmentId: pairedWebRuntimeEnvironmentId,
+        environmentId: runtimeEnvironmentId,
         targetGroupId: groupId,
         activate: true
       })
@@ -793,6 +900,21 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
           delete nextUnreadTerminalPanes[paneKey]
         }
       }
+      let nextUnreadAgentCompletionPanes = s.unreadAgentCompletionPanes
+      for (const paneKey of Object.keys(s.unreadAgentCompletionPanes)) {
+        if (paneKey.startsWith(`${tabId}:`)) {
+          if (nextUnreadAgentCompletionPanes === s.unreadAgentCompletionPanes) {
+            nextUnreadAgentCompletionPanes = { ...s.unreadAgentCompletionPanes }
+          }
+          delete nextUnreadAgentCompletionPanes[paneKey]
+        }
+      }
+      const nextLastTerminalInputAtByPaneKey = { ...s.lastTerminalInputAtByPaneKey }
+      for (const paneKey of Object.keys(nextLastTerminalInputAtByPaneKey)) {
+        if (paneKey.startsWith(`${tabId}:`)) {
+          delete nextLastTerminalInputAtByPaneKey[paneKey]
+        }
+      }
       const nextPendingStartupByTabId = { ...s.pendingStartupByTabId }
       delete nextPendingStartupByTabId[tabId]
       const nextPendingSetupSplitByTabId = { ...s.pendingSetupSplitByTabId }
@@ -861,6 +983,10 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
         ...(nextUnreadTerminalPanes !== s.unreadTerminalPanes
           ? { unreadTerminalPanes: nextUnreadTerminalPanes }
           : {}),
+        ...(nextUnreadAgentCompletionPanes !== s.unreadAgentCompletionPanes
+          ? { unreadAgentCompletionPanes: nextUnreadAgentCompletionPanes }
+          : {}),
+        lastTerminalInputAtByPaneKey: nextLastTerminalInputAtByPaneKey,
         expandedPaneByTabId: nextExpanded,
         canExpandPaneByTabId: nextCanExpand,
         terminalLayoutsByTabId: nextLayouts,
@@ -1016,6 +1142,21 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
       }
       const nextTitle = title.trim() || getFallbackTabTitle(currentTab)
       const currentUnifiedTabs = s.unifiedTabsByWorktree[ownerWorktreeId] ?? []
+      if (isDecorativeAgentTitleFrameChange(currentTab.title, nextTitle)) {
+        const unifiedTabsWithCurrentLabel = updateUnifiedTerminalLabel(
+          currentUnifiedTabs,
+          tabId,
+          currentTab.title
+        )
+        return unifiedTabsWithCurrentLabel
+          ? {
+              unifiedTabsByWorktree: {
+                ...s.unifiedTabsByWorktree,
+                [ownerWorktreeId]: unifiedTabsWithCurrentLabel
+              }
+            }
+          : s
+      }
       const unifiedTabsWithUpdatedLabel = updateUnifiedTerminalLabel(
         currentUnifiedTabs,
         tabId,
@@ -1084,7 +1225,12 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
       const tabs = s.tabsByWorktree[ownerWorktreeId] ?? []
       const tabIndex = tabs.findIndex((tab) => tab.id === tabId)
       const currentTab = tabs[tabIndex]
-      if (!currentTab || currentTab.customTitle?.trim() || currentTab.generatedTitle?.trim()) {
+      if (
+        !currentTab ||
+        currentTab.customTitle?.trim() ||
+        currentTab.quickCommandLabel?.trim() ||
+        currentTab.generatedTitle?.trim()
+      ) {
         return s
       }
       const generatedTitle = deriveGeneratedTabTitle(prompt)
@@ -1142,6 +1288,9 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
       const currentByPane = s.runtimePaneTitlesByTabId[tabId] ?? {}
       const prevTitle = currentByPane[paneId]
       if (prevTitle === title) {
+        return s
+      }
+      if (prevTitle && isDecorativeAgentTitleFrameChange(prevTitle, title)) {
         return s
       }
       // Why: smart sort's title-heuristic fallback (Edge case 9) reads
@@ -1242,6 +1391,20 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
     })
   },
 
+  markAgentCompletionPaneUnread: (paneKey) => {
+    set((s) => {
+      if (s.unreadAgentCompletionPanes[paneKey]) {
+        return s
+      }
+      return {
+        unreadAgentCompletionPanes: {
+          ...s.unreadAgentCompletionPanes,
+          [paneKey]: true as const
+        }
+      }
+    })
+  },
+
   clearTerminalTabUnread: (tabId) => {
     set((s) => {
       if (!s.unreadTerminalTabs[tabId]) {
@@ -1255,12 +1418,17 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
 
   clearTerminalPaneUnread: (paneKey) => {
     set((s) => {
-      if (!s.unreadTerminalPanes[paneKey]) {
+      if (!s.unreadTerminalPanes[paneKey] && !s.unreadAgentCompletionPanes[paneKey]) {
         return s
       }
-      const copy = { ...s.unreadTerminalPanes }
-      delete copy[paneKey]
-      return { unreadTerminalPanes: copy }
+      const nextUnreadTerminalPanes = { ...s.unreadTerminalPanes }
+      const nextUnreadAgentCompletionPanes = { ...s.unreadAgentCompletionPanes }
+      delete nextUnreadTerminalPanes[paneKey]
+      delete nextUnreadAgentCompletionPanes[paneKey]
+      return {
+        unreadTerminalPanes: nextUnreadTerminalPanes,
+        unreadAgentCompletionPanes: nextUnreadAgentCompletionPanes
+      }
     })
   },
 
@@ -1566,6 +1734,8 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
       // in tabs.ts.
       let nextUnreadTerminalTabs = s.unreadTerminalTabs
       let nextUnreadTerminalPanes = s.unreadTerminalPanes
+      let nextUnreadAgentCompletionPanes = s.unreadAgentCompletionPanes
+      let nextLastTerminalInputAtByPaneKey = s.lastTerminalInputAtByPaneKey
       for (const tab of tabs) {
         if (!keepIdentifiers) {
           delete nextRuntimePaneTitlesByTabId[tab.id]
@@ -1584,6 +1754,22 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
               nextUnreadTerminalPanes = { ...s.unreadTerminalPanes }
             }
             delete nextUnreadTerminalPanes[paneKey]
+          }
+        }
+        for (const paneKey of Object.keys(nextUnreadAgentCompletionPanes)) {
+          if (paneKey.startsWith(`${tab.id}:`)) {
+            if (nextUnreadAgentCompletionPanes === s.unreadAgentCompletionPanes) {
+              nextUnreadAgentCompletionPanes = { ...s.unreadAgentCompletionPanes }
+            }
+            delete nextUnreadAgentCompletionPanes[paneKey]
+          }
+        }
+        for (const paneKey of Object.keys(nextLastTerminalInputAtByPaneKey)) {
+          if (paneKey.startsWith(`${tab.id}:`)) {
+            if (nextLastTerminalInputAtByPaneKey === s.lastTerminalInputAtByPaneKey) {
+              nextLastTerminalInputAtByPaneKey = { ...s.lastTerminalInputAtByPaneKey }
+            }
+            delete nextLastTerminalInputAtByPaneKey[paneKey]
           }
         }
         if (!keepIdentifiers) {
@@ -1630,9 +1816,21 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
           : {}),
         ...(nextUnreadTerminalPanes !== s.unreadTerminalPanes
           ? { unreadTerminalPanes: nextUnreadTerminalPanes }
+          : {}),
+        ...(nextUnreadAgentCompletionPanes !== s.unreadAgentCompletionPanes
+          ? { unreadAgentCompletionPanes: nextUnreadAgentCompletionPanes }
+          : {}),
+        ...(nextLastTerminalInputAtByPaneKey !== s.lastTerminalInputAtByPaneKey
+          ? { lastTerminalInputAtByPaneKey: nextLastTerminalInputAtByPaneKey }
           : {})
       }
     })
+
+    if (keepIdentifiers) {
+      get().captureSleepingAgentSessionsByWorktree(worktreeId, opts?.sleepingPaneKeys)
+    } else {
+      get().clearSleepingAgentSessionsByWorktree(worktreeId)
+    }
 
     // Why: sleep/remove fold the whole worktree surface. The live PTY bindings
     // were cleared above and kill is about to run, so live rows are stale;
@@ -1645,10 +1843,10 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
       return
     }
 
-    const target = getActiveRuntimeTarget(get().settings)
-    if (target.kind === 'environment') {
+    const runtimeEnvironmentId = resolveTerminalStopRuntimeEnvironmentId(get(), worktreeId)
+    if (runtimeEnvironmentId) {
       await callRuntimeRpc(
-        target,
+        { kind: 'environment', environmentId: runtimeEnvironmentId },
         'terminal.stop',
         { worktree: toRuntimeWorktreeSelector(worktreeId) },
         { timeoutMs: 15_000 }
@@ -1902,7 +2100,14 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
       // its tabs still use the normal terminal session pipeline so daemon PTYs
       // can survive app restart just like workspace terminals.
       validWorktreeIds.add(FLOATING_TERMINAL_WORKTREE_ID)
+      for (const workspace of s.folderWorkspaces) {
+        validWorktreeIds.add(folderWorkspaceKey(workspace.id))
+      }
       for (const worktreeId of Object.keys(session.tabsByWorktree)) {
+        const parsedWorkspaceKey = parseWorkspaceKey(worktreeId)
+        if (parsedWorkspaceKey?.type === 'folder') {
+          continue
+        }
         if (!validWorktreeIds.has(worktreeId)) {
           const repoId = getRepoIdFromWorktreeId(worktreeId)
           // Why (#1158): an empty/missing list can mean degraded hydration; a
@@ -1931,21 +2136,33 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
       const tabsByWorktree: Record<string, TerminalTab[]> = Object.fromEntries(
         Object.entries(session.tabsByWorktree)
           .filter(([worktreeId]) => validWorktreeIds.has(worktreeId))
-          .map(([worktreeId, tabs]) => [
-            worktreeId,
-            [...tabs]
-              .filter((tab) => {
-                // Why: old web-client mirrors could persist host surface ids
-                // with "::"; makePaneKey reserves ":" as its separator.
-                return isValidTerminalTabId(tab.id)
-              })
-              .sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt - b.createdAt)
-              .map((tab, index) => ({
-                ...clearTransientTerminalState(tab, index),
-                sortOrder: index,
-                pendingActivationSpawn: true
-              }))
-          ])
+          .map(([worktreeId, tabs]) => {
+            const quickCommandLabelByTerminalId = new Map(
+              (session.unifiedTabs?.[worktreeId] ?? [])
+                .filter((tab) => tab.contentType === 'terminal' && tab.quickCommandLabel?.trim())
+                .map((tab) => [tab.entityId, tab.quickCommandLabel!.trim()])
+            )
+            return [
+              worktreeId,
+              [...tabs]
+                .filter((tab) => {
+                  // Why: old web-client mirrors could persist host surface ids
+                  // with "::"; makePaneKey reserves ":" as its separator.
+                  return isValidTerminalTabId(tab.id)
+                })
+                .sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt - b.createdAt)
+                .map((tab, index) => {
+                  const quickCommandLabel =
+                    tab.quickCommandLabel?.trim() || quickCommandLabelByTerminalId.get(tab.id)
+                  return {
+                    ...clearTransientTerminalState(tab, index),
+                    ...(quickCommandLabel ? { quickCommandLabel } : {}),
+                    sortOrder: index,
+                    pendingActivationSpawn: true
+                  }
+                })
+            ]
+          })
           .filter(([, tabs]) => tabs.length > 0)
       )
 
@@ -1954,10 +2171,23 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
           .flat()
           .map((tab) => tab.id)
       )
+      const sleepingAgentSessionsByPaneKey = Object.fromEntries(
+        Object.entries(session.sleepingAgentSessionsByPaneKey ?? {}).filter(([, record]) =>
+          validWorktreeIds.has(record.worktreeId)
+        )
+      )
       const activeWorktreeId =
         session.activeWorktreeId && validWorktreeIds.has(session.activeWorktreeId)
           ? session.activeWorktreeId
           : null
+      const activeWorkspaceKey: WorkspaceKey | null =
+        session.activeWorkspaceKey && validWorktreeIds.has(session.activeWorkspaceKey)
+          ? session.activeWorkspaceKey
+          : activeWorktreeId
+            ? parseWorkspaceKey(activeWorktreeId)
+              ? (activeWorktreeId as WorkspaceKey)
+              : worktreeWorkspaceKey(activeWorktreeId)
+            : null
       const activeTabId =
         session.activeTabId && validTabIds.has(session.activeTabId) ? session.activeTabId : null
       const activeRepoId =
@@ -2110,6 +2340,7 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
       return {
         activeRepoId,
         activeWorktreeId,
+        activeWorkspaceKey,
         activeTabId,
         activeTabIdByWorktree,
         tabsByWorktree,
@@ -2121,6 +2352,7 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
         lastVisitedAtByWorktreeId: session.lastVisitedAtByWorktreeId ?? {},
         defaultTerminalTabsAppliedByWorktreeId:
           session.defaultTerminalTabsAppliedByWorktreeId ?? {},
+        sleepingAgentSessionsByPaneKey,
         pendingReconnectWorktreeIds,
         pendingReconnectTabByWorktree,
         pendingReconnectPtyIdByTabId,

@@ -135,6 +135,10 @@ export class CodexRuntimeHomeService {
     return this.getRuntimeHomePath()
   }
 
+  getHostRuntimeHomePath(): string {
+    return this.getRuntimeHomePath()
+  }
+
   private getWslSystemCodexHomePath(target: CodexAccountSelectionTarget): string | null {
     if (process.platform !== 'win32') {
       return null
@@ -313,6 +317,20 @@ export class CodexRuntimeHomeService {
   private readBackRefreshedTokens(options: {
     updateLastWrittenAuthJson: boolean
   }): CodexReadBackResult {
+    const selectedAccountId = normalizeCodexRuntimeSelection(this.store.getSettings()).host
+    if (selectedAccountId) {
+      const selectedAccountResult = this.readBackRefreshedTokensFromPath(
+        this.getRuntimeAuthPath(),
+        {
+          ...options,
+          expectedAccountId: selectedAccountId
+        }
+      )
+      if (selectedAccountResult !== 'rejected') {
+        return selectedAccountResult
+      }
+    }
+
     return this.readBackRefreshedTokensFromPath(this.getRuntimeAuthPath(), options)
   }
 

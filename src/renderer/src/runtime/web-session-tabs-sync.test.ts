@@ -14,6 +14,10 @@ import {
   clearWebSessionTabsTrackingForEnvironment,
   resolveHostSessionTabIdForWebSessionTab,
   resetWebSessionTabsSnapshotFreshnessForTests,
+  shouldApplyWebSessionTabsSnapshot,
+  shouldBootstrapInitialWebRuntimeTerminal,
+  shouldRespawnWebRuntimeTerminalAfterWake,
+  shouldSyncRuntimeSessionTabs,
   type WebSessionTabsSyncState
 } from './web-session-tabs-sync'
 
@@ -93,6 +97,124 @@ describe('applyWebSessionTabsSnapshot', () => {
 
     expect(second).toBe(afterNewer)
     expect(applyFreshWebSessionTabsSnapshot(afterNewer, newer, ENV, NOW)).toBe(afterNewer)
+  })
+
+  it('does not bootstrap a terminal from a stale empty active-worktree snapshot', () => {
+    const ready = makeSnapshot([
+      {
+        type: 'terminal',
+        id: HOST_SURFACE_ID,
+        parentTabId: 'host-tab-1',
+        leafId: LEAF_ID,
+        title: 'Terminal',
+        status: 'ready',
+        terminal: 'term_host',
+        isActive: true
+      }
+    ])
+    const staleEmpty = makeSnapshot([], {
+      publicationEpoch: ready.publicationEpoch,
+      snapshotVersion: ready.snapshotVersion - 1,
+      activeGroupId: null,
+      activeTabId: null,
+      activeTabType: null
+    })
+
+    expect(shouldApplyWebSessionTabsSnapshot(ready, ENV)).toBe(true)
+    const staleIsFresh = shouldApplyWebSessionTabsSnapshot(staleEmpty, ENV)
+
+    expect(staleIsFresh).toBe(false)
+    expect(
+      shouldBootstrapInitialWebRuntimeTerminal({
+        event: { type: 'snapshot', ...staleEmpty },
+        activeWorktreeId: WT,
+        requestedInitialTerminal: false,
+        snapshotIsFresh: staleIsFresh,
+        localTerminalCount: 0
+      })
+    ).toBe(false)
+  })
+
+  it('does not bootstrap a terminal from a fresh empty snapshot when local terminals already exist', () => {
+    const freshEmpty = makeSnapshot([], {
+      activeGroupId: null,
+      activeTabId: null,
+      activeTabType: null
+    })
+
+    expect(
+      shouldBootstrapInitialWebRuntimeTerminal({
+        event: { type: 'snapshot', ...freshEmpty },
+        activeWorktreeId: WT,
+        requestedInitialTerminal: false,
+        snapshotIsFresh: true,
+        localTerminalCount: 1
+      })
+    ).toBe(false)
+  })
+
+  it('does not respawn after wake when activation already requested a respawn', () => {
+    const freshEmpty = makeSnapshot([], {
+      activeGroupId: null,
+      activeTabId: null,
+      activeTabType: null
+    })
+
+    expect(
+      shouldRespawnWebRuntimeTerminalAfterWake({
+        event: { type: 'snapshot', ...freshEmpty },
+        activeWorktreeId: WT,
+        requestedRespawnAfterWake: false,
+        snapshotIsFresh: true,
+        localTerminalCount: 1,
+        hasLiveLocalPty: false,
+        skipWakeRespawn: true
+      })
+    ).toBe(false)
+  })
+
+  it('respawns a terminal after wake when local slept tabs exist but the host snapshot is empty', () => {
+    const freshEmpty = makeSnapshot([], {
+      activeGroupId: null,
+      activeTabId: null,
+      activeTabType: null
+    })
+
+    expect(
+      shouldRespawnWebRuntimeTerminalAfterWake({
+        event: { type: 'snapshot', ...freshEmpty },
+        activeWorktreeId: WT,
+        requestedRespawnAfterWake: false,
+        snapshotIsFresh: true,
+        localTerminalCount: 1,
+        hasLiveLocalPty: false
+      })
+    ).toBe(true)
+  })
+
+  it('syncs session tabs for desktop remote runtime clients, not only web clients', () => {
+    vi.stubGlobal('__ORCA_WEB_CLIENT__', false)
+
+    expect(
+      shouldSyncRuntimeSessionTabs({
+        activeRuntimeEnvironmentId: ENV,
+        workspaceSessionReady: true
+      })
+    ).toBe(true)
+    expect(
+      shouldSyncRuntimeSessionTabs({
+        activeRuntimeEnvironmentId: ENV,
+        activeWorktreeId: WT,
+        workspaceSessionReady: true,
+        requireActiveWorktree: true
+      })
+    ).toBe(true)
+    expect(
+      shouldSyncRuntimeSessionTabs({
+        activeRuntimeEnvironmentId: null,
+        workspaceSessionReady: true
+      })
+    ).toBe(false)
   })
 
   it('clears web session tracking maps when the host removes a worktree snapshot', () => {
@@ -273,6 +395,115 @@ describe('applyWebSessionTabsSnapshot', () => {
     })
   })
 
+  it('replaces stale local agent quick-launch tabs once host mirrors arrive', () => {
+    const staleLocalAgentTab: TerminalTab = {
+      id: 'local-agent-tab',
+      ptyId: null,
+      worktreeId: WT,
+      title: 'Claude',
+      defaultTitle: 'Claude',
+      customTitle: null,
+      color: null,
+      sortOrder: 0,
+      createdAt: NOW,
+      launchAgent: 'claude'
+    }
+    const staleUnifiedTab: Tab = {
+      id: 'local-agent-tab',
+      entityId: 'local-agent-tab',
+      groupId: 'group-1',
+      worktreeId: WT,
+      contentType: 'terminal',
+      label: 'Claude',
+      customLabel: null,
+      color: null,
+      sortOrder: 0,
+      createdAt: NOW,
+      isPreview: false,
+      isPinned: false
+    }
+
+    const patch = applyWebSessionTabsSnapshot(
+      makeState({
+        tabsByWorktree: { [WT]: [staleLocalAgentTab] },
+        unifiedTabsByWorktree: { [WT]: [staleUnifiedTab] },
+        groupsByWorktree: {
+          [WT]: [
+            {
+              id: 'group-1',
+              worktreeId: WT,
+              activeTabId: 'local-agent-tab',
+              tabOrder: ['local-agent-tab']
+            }
+          ]
+        }
+      }),
+      makeSnapshot([
+        {
+          type: 'terminal',
+          id: HOST_SURFACE_ID,
+          title: 'Claude',
+          parentTabId: 'host-tab-1',
+          leafId: LEAF_ID,
+          isActive: true,
+          launchAgent: 'claude',
+          status: 'ready',
+          terminal: 'terminal-1'
+        }
+      ]),
+      ENV,
+      NOW
+    ) as Partial<WebSessionTabsSyncState>
+
+    const mirroredId = patch.tabsByWorktree?.[WT]?.[0]?.id
+    expect(mirroredId).toBeTruthy()
+    expect(patch.tabsByWorktree?.[WT]).toHaveLength(1)
+    expect(patch.tabsByWorktree?.[WT]?.[0]?.id).not.toBe('local-agent-tab')
+    expect(patch.unifiedTabsByWorktree?.[WT]?.some((tab) => tab.id === 'local-agent-tab')).toBe(
+      false
+    )
+    expect(patch.groupsByWorktree?.[WT]?.[0]?.tabOrder).toEqual([mirroredId])
+  })
+
+  it('keeps stale local agent tabs when the host mirror is for a different agent', () => {
+    const staleLocalClaudeTab: TerminalTab = {
+      id: 'local-claude-tab',
+      ptyId: null,
+      worktreeId: WT,
+      title: 'Claude',
+      defaultTitle: 'Claude',
+      customTitle: null,
+      color: null,
+      sortOrder: 0,
+      createdAt: NOW,
+      launchAgent: 'claude'
+    }
+
+    const patch = applyWebSessionTabsSnapshot(
+      makeState({
+        tabsByWorktree: { [WT]: [staleLocalClaudeTab] }
+      }),
+      makeSnapshot([
+        {
+          type: 'terminal',
+          id: HOST_SURFACE_ID,
+          title: 'Codex',
+          parentTabId: 'host-tab-1',
+          leafId: LEAF_ID,
+          isActive: true,
+          launchAgent: 'codex',
+          status: 'ready',
+          terminal: 'terminal-1'
+        }
+      ]),
+      ENV,
+      NOW
+    ) as Partial<WebSessionTabsSyncState>
+
+    expect(patch.tabsByWorktree?.[WT]).toHaveLength(2)
+    expect(patch.tabsByWorktree?.[WT]?.some((tab) => tab.id === 'local-claude-tab')).toBe(true)
+  })
+
   it('hydrates ready host terminal surfaces as remote runtime terminal tabs', () => {
     const patch = applyWebSessionTabsSnapshot(
       makeState(),
@@ -320,6 +551,80 @@ describe('applyWebSessionTabsSnapshot', () => {
     })
     expect(patch.activeTabId).toBe(mirroredId)
     expect(patch.activeTabIdByWorktree?.[WT]).toBe(mirroredId)
+  })
+
+  it('preserves mirrored launch intent when a later host snapshot omits it', () => {
+    const existingTab: TerminalTab = {
+      id: toWebTerminalSurfaceTabId('host-tab-1'),
+      ptyId: 'remote:web-env-1@@terminal-1',
+      worktreeId: WT,
+      title: 'Codex',
+      defaultTitle: 'Codex',
+      customTitle: null,
+      color: null,
+      sortOrder: 0,
+      createdAt: NOW,
+      launchAgent: 'codex'
+    }
+
+    const patch = applyWebSessionTabsSnapshot(
+      makeState({
+        tabsByWorktree: { [WT]: [existingTab] },
+        ptyIdsByTabId: { [existingTab.id]: ['remote:web-env-1@@terminal-1'] }
+      }),
+      makeSnapshot([
+        {
+          type: 'terminal',
+          id: HOST_SURFACE_ID,
+          title: 'zsh',
+          parentTabId: 'host-tab-1',
+          leafId: LEAF_ID,
+          isActive: true,
+          status: 'ready',
+          terminal: 'terminal-1'
+        }
+      ]),
+      ENV,
+      NOW + 1
+    ) as Partial<WebSessionTabsSyncState>
+
+    expect(patch.tabsByWorktree?.[WT]?.[0]).toMatchObject({
+      id: existingTab.id,
+      title: 'zsh',
+      launchAgent: 'codex'
+    })
+  })
+
+  it('preserves quick command labels from host terminal surfaces', () => {
+    const patch = applyWebSessionTabsSnapshot(
+      makeState(),
+      makeSnapshot([
+        {
+          type: 'terminal',
+          id: HOST_SURFACE_ID,
+          title: 'Run tests',
+          quickCommandLabel: 'Run tests',
+          parentTabId: 'host-tab-1',
+          leafId: LEAF_ID,
+          isActive: true,
+          status: 'ready',
+          terminal: 'terminal-1'
+        }
+      ]),
+      ENV,
+      NOW
+    ) as Partial<WebSessionTabsSyncState>
+
+    const mirroredId = patch.tabsByWorktree?.[WT]?.[0]?.id
+    expect(patch.tabsByWorktree?.[WT]?.[0]).toMatchObject({
+      id: mirroredId,
+      quickCommandLabel: 'Run tests',
+      title: 'Run tests'
+    })
+    expect(
+      patch.unifiedTabsByWorktree?.[WT]?.find((tab) => tab.entityId === mirroredId)
+        ?.quickCommandLabel
+    ).toBe('Run tests')
   })
 
   it('removes stale scrollback refs from mirrored terminal layouts', () => {
@@ -543,6 +848,149 @@ describe('applyWebSessionTabsSnapshot', () => {
     expect(terminalTab).toMatchObject({ groupId: 'group-terminal' })
     expect(browserTab).toMatchObject({ id: 'host-browser-unified', groupId: 'group-browser' })
     expect(editorTab).toMatchObject({ id: 'host-readme-unified', groupId: 'group-editor' })
+  })
+
+  it('preserves local browser position when appending a new remote terminal', () => {
+    const firstTerminalId = toWebTerminalSurfaceTabId('host-tab-1')
+    const secondTerminalId = toWebTerminalSurfaceTabId('host-tab-2')
+    const localBrowserWorkspace: BrowserWorkspace = {
+      id: 'local-browser-workspace',
+      worktreeId: WT,
+      label: undefined,
+      sessionProfileId: null,
+      activePageId: 'local-browser-page',
+      pageIds: ['local-browser-page'],
+      url: 'about:blank',
+      title: 'New Browser Tab',
+      loading: false,
+      faviconUrl: null,
+      canGoBack: false,
+      canGoForward: false,
+      loadError: null,
+      createdAt: NOW + 1
+    }
+    const localBrowserPage: BrowserPage = {
+      id: 'local-browser-page',
+      workspaceId: localBrowserWorkspace.id,
+      worktreeId: WT,
+      url: 'about:blank',
+      title: 'New Browser Tab',
+      loading: false,
+      faviconUrl: null,
+      canGoBack: false,
+      canGoForward: false,
+      loadError: null,
+      createdAt: NOW + 1,
+      browserRuntimeEnvironmentId: null,
+      viewportPresetId: null
+    }
+    const localBrowserTab: Tab = {
+      id: 'local-browser-tab',
+      entityId: localBrowserWorkspace.id,
+      groupId: 'host-group-1',
+      worktreeId: WT,
+      contentType: 'browser',
+      label: 'New Browser Tab',
+      customLabel: null,
+      color: null,
+      sortOrder: 1,
+      createdAt: NOW + 1,
+      isPreview: false,
+      isPinned: false
+    }
+
+    const patch = applyWebSessionTabsSnapshot(
+      makeState({
+        tabsByWorktree: {
+          [WT]: [
+            {
+              id: firstTerminalId,
+              ptyId: 'remote:web-env-1@@terminal-1',
+              worktreeId: WT,
+              title: 'Terminal 1',
+              customTitle: null,
+              color: null,
+              sortOrder: 0,
+              createdAt: NOW
+            }
+          ]
+        },
+        browserTabsByWorktree: { [WT]: [localBrowserWorkspace] },
+        browserPagesByWorkspace: { [localBrowserWorkspace.id]: [localBrowserPage] },
+        unifiedTabsByWorktree: {
+          [WT]: [
+            {
+              id: firstTerminalId,
+              entityId: firstTerminalId,
+              groupId: 'host-group-1',
+              worktreeId: WT,
+              contentType: 'terminal',
+              label: 'Terminal 1',
+              customLabel: null,
+              color: null,
+              sortOrder: 0,
+              createdAt: NOW,
+              isPreview: false,
+              isPinned: false
+            },
+            localBrowserTab
+          ]
+        },
+        tabBarOrderByWorktree: { [WT]: [firstTerminalId, localBrowserTab.id] },
+        groupsByWorktree: {
+          [WT]: [
+            {
+              id: 'host-group-1',
+              worktreeId: WT,
+              activeTabId: localBrowserTab.id,
+              tabOrder: [firstTerminalId, localBrowserTab.id]
+            }
+          ]
+        }
+      }),
+      makeSnapshot(
+        [
+          {
+            type: 'terminal',
+            id: `host-tab-1::${LEAF_ID}`,
+            title: 'Terminal 1',
+            parentTabId: 'host-tab-1',
+            leafId: LEAF_ID,
+            isActive: false,
+            status: 'ready',
+            terminal: 'terminal-1'
+          },
+          {
+            type: 'terminal',
+            id: `host-tab-2::${SECOND_LEAF_ID}`,
+            title: 'Terminal 2',
+            parentTabId: 'host-tab-2',
+            leafId: SECOND_LEAF_ID,
+            isActive: true,
+            status: 'ready',
+            terminal: 'terminal-2'
+          }
+        ],
+        {
+          activeTabId: `host-tab-2::${SECOND_LEAF_ID}`,
+          tabGroups: [
+            {
+              id: 'host-group-1',
+              activeTabId: 'host-tab-2',
+              tabOrder: ['host-tab-1', 'host-tab-2']
+            }
+          ]
+        }
+      ),
+      ENV,
+      NOW
+    ) as Partial<WebSessionTabsSyncState>
+
+    expect(patch.tabBarOrderByWorktree?.[WT]).toEqual([
+      firstTerminalId,
+      localBrowserTab.id,
+      secondTerminalId
+    ])
   })
 
   it('keeps retained local-only groups reachable when applying a host layout', () => {
@@ -979,6 +1427,210 @@ describe('applyWebSessionTabsSnapshot', () => {
     })
     expect(patch.groupsByWorktree?.[WT]?.[0]?.tabOrder).toEqual([mirroredId])
     expect(patch.activeTabIdByWorktree?.[WT]).toBe(mirroredId)
+  })
+
+  it('does not let repeated remote terminal status snapshots steal local tab focus', () => {
+    const agentTabId = toWebTerminalSurfaceTabId('host-tab-1')
+    const shellTabId = toWebTerminalSurfaceTabId('host-tab-2')
+    const agentUnifiedTab: Tab = {
+      id: agentTabId,
+      entityId: agentTabId,
+      groupId: 'host-group-1',
+      worktreeId: WT,
+      contentType: 'terminal',
+      label: 'codex [working]',
+      customLabel: null,
+      color: null,
+      sortOrder: 0,
+      createdAt: NOW,
+      isPreview: false,
+      isPinned: false
+    }
+    const shellUnifiedTab: Tab = {
+      id: shellTabId,
+      entityId: shellTabId,
+      groupId: 'host-group-1',
+      worktreeId: WT,
+      contentType: 'terminal',
+      label: 'shell',
+      customLabel: null,
+      color: null,
+      sortOrder: 1,
+      createdAt: NOW + 1,
+      isPreview: false,
+      isPinned: false
+    }
+
+    const patch = applyWebSessionTabsSnapshot(
+      makeState({
+        activeTabId: shellTabId,
+        activeTabIdByWorktree: { [WT]: shellTabId },
+        activeTabType: 'terminal',
+        activeTabTypeByWorktree: { [WT]: 'terminal' },
+        tabsByWorktree: {
+          [WT]: [
+            {
+              id: agentTabId,
+              ptyId: 'remote:web-env-1@@terminal-1',
+              worktreeId: WT,
+              title: 'codex [working]',
+              customTitle: null,
+              color: null,
+              sortOrder: 0,
+              createdAt: NOW
+            },
+            {
+              id: shellTabId,
+              ptyId: 'remote:web-env-1@@terminal-2',
+              worktreeId: WT,
+              title: 'shell',
+              customTitle: null,
+              color: null,
+              sortOrder: 1,
+              createdAt: NOW + 1
+            }
+          ]
+        },
+        unifiedTabsByWorktree: { [WT]: [agentUnifiedTab, shellUnifiedTab] },
+        tabBarOrderByWorktree: { [WT]: [agentTabId, shellTabId] },
+        groupsByWorktree: {
+          [WT]: [
+            {
+              id: 'host-group-1',
+              worktreeId: WT,
+              activeTabId: shellTabId,
+              tabOrder: [agentTabId, shellTabId],
+              recentTabIds: [agentTabId, shellTabId]
+            }
+          ]
+        }
+      }),
+      makeSnapshot(
+        [
+          {
+            type: 'terminal',
+            id: `host-tab-1::${LEAF_ID}`,
+            title: 'codex [thinking]',
+            parentTabId: 'host-tab-1',
+            leafId: LEAF_ID,
+            isActive: true,
+            status: 'ready',
+            terminal: 'terminal-1'
+          },
+          {
+            type: 'terminal',
+            id: `host-tab-2::${SECOND_LEAF_ID}`,
+            title: 'shell',
+            parentTabId: 'host-tab-2',
+            leafId: SECOND_LEAF_ID,
+            isActive: false,
+            status: 'ready',
+            terminal: 'terminal-2'
+          }
+        ],
+        {
+          activeTabId: `host-tab-1::${LEAF_ID}`,
+          activeTabType: 'terminal',
+          tabGroups: [
+            {
+              id: 'host-group-1',
+              activeTabId: 'host-tab-1',
+              tabOrder: ['host-tab-1', 'host-tab-2']
+            }
+          ]
+        }
+      ),
+      ENV,
+      NOW + 10
+    ) as Partial<WebSessionTabsSyncState>
+
+    expect(patch.activeTabId).toBeUndefined()
+    expect(patch.activeTabIdByWorktree).toBeUndefined()
+    expect(patch.groupsByWorktree?.[WT]?.[0]).toMatchObject({
+      activeTabId: shellTabId,
+      tabOrder: [agentTabId, shellTabId]
+    })
+  })
+
+  it('does not let repeated remote split status snapshots steal local pane focus', () => {
+    const mirroredTabId = toWebTerminalSurfaceTabId('host-tab-1')
+    const currentLayout = {
+      root: {
+        type: 'split' as const,
+        direction: 'horizontal' as const,
+        first: { type: 'leaf' as const, leafId: LEAF_ID },
+        second: { type: 'leaf' as const, leafId: SECOND_LEAF_ID }
+      },
+      activeLeafId: SECOND_LEAF_ID,
+      expandedLeafId: null,
+      ptyIdsByLeafId: {
+        [LEAF_ID]: 'remote:web-env-1@@terminal-1',
+        [SECOND_LEAF_ID]: 'remote:web-env-1@@terminal-2'
+      }
+    }
+
+    const patch = applyWebSessionTabsSnapshot(
+      makeState({
+        activeTabId: mirroredTabId,
+        activeTabIdByWorktree: { [WT]: mirroredTabId },
+        activeTabType: 'terminal',
+        activeTabTypeByWorktree: { [WT]: 'terminal' },
+        tabsByWorktree: {
+          [WT]: [
+            {
+              id: mirroredTabId,
+              ptyId: 'remote:web-env-1@@terminal-2',
+              worktreeId: WT,
+              title: 'right pane',
+              customTitle: null,
+              color: null,
+              sortOrder: 0,
+              createdAt: NOW
+            }
+          ]
+        },
+        terminalLayoutsByTabId: { [mirroredTabId]: currentLayout }
+      }),
+      makeSnapshot([
+        {
+          type: 'terminal',
+          id: `host-tab-1::${LEAF_ID}`,
+          title: 'codex [thinking]',
+          parentTabId: 'host-tab-1',
+          leafId: LEAF_ID,
+          parentLayout: {
+            ...currentLayout,
+            activeLeafId: LEAF_ID
+          },
+          isActive: true,
+          status: 'ready',
+          terminal: 'terminal-1'
+        },
+        {
+          type: 'terminal',
+          id: `host-tab-1::${SECOND_LEAF_ID}`,
+          title: 'right pane',
+          parentTabId: 'host-tab-1',
+          leafId: SECOND_LEAF_ID,
+          parentLayout: {
+            ...currentLayout,
+            activeLeafId: LEAF_ID
+          },
+          isActive: false,
+          status: 'ready',
+          terminal: 'terminal-2'
+        }
+      ]),
+      ENV,
+      NOW + 10
+    ) as Partial<WebSessionTabsSyncState>
+
+    expect(patch.tabsByWorktree?.[WT]?.[0]).toMatchObject({
+      id: mirroredTabId,
+      ptyId: 'remote:web-env-1@@terminal-2',
+      title: 'right pane'
+    })
+    expect(patch.terminalLayoutsByTabId?.[mirroredTabId]?.activeLeafId).toBe(SECOND_LEAF_ID)
   })
 
   it('removes a null-pty pending activation tab when the host publishes the initial terminal', () => {
@@ -1632,5 +2284,55 @@ describe('applyWebSessionTabsSnapshot', () => {
       ptyIdsByLeafId: {}
     })
     expect(patch.activeTabId).toBe(mirroredId)
+  })
+
+  it('does not attach a ready sibling PTY to an active pending split leaf', () => {
+    const patch = applyWebSessionTabsSnapshot(
+      makeState(),
+      makeSnapshot([
+        {
+          type: 'terminal',
+          id: `host-tab-1::${LEAF_ID}`,
+          title: 'ready shell',
+          parentTabId: 'host-tab-1',
+          leafId: LEAF_ID,
+          isActive: false,
+          status: 'ready',
+          terminal: 'terminal-1'
+        },
+        {
+          type: 'terminal',
+          id: `host-tab-1::${SECOND_LEAF_ID}`,
+          title: 'pending shell',
+          parentTabId: 'host-tab-1',
+          leafId: SECOND_LEAF_ID,
+          isActive: true,
+          status: 'pending-handle',
+          terminal: null
+        }
+      ]),
+      ENV,
+      NOW
+    ) as Partial<WebSessionTabsSyncState>
+
+    const mirroredId = patch.tabsByWorktree?.[WT]?.[0]?.id
+    expect(mirroredId).toBeTruthy()
+    expect(patch.tabsByWorktree?.[WT]).toMatchObject([
+      {
+        id: mirroredId,
+        ptyId: null,
+        title: 'pending shell',
+        worktreeId: WT
+      }
+    ])
+    expect(patch.ptyIdsByTabId?.[mirroredId!]).toEqual(['remote:web-env-1@@terminal-1'])
+    expect(patch.terminalLayoutsByTabId?.[mirroredId!]).toMatchObject({
+      activeLeafId: SECOND_LEAF_ID,
+      ptyIdsByLeafId: {
+        [LEAF_ID]: 'remote:web-env-1@@terminal-1'
+      }
+    })
+    expect(patch.activeTabId).toBe(mirroredId)
+    expect(patch.activeTabIdByWorktree?.[WT]).toBe(mirroredId)
   })
 })

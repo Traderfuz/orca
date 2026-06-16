@@ -195,6 +195,32 @@ describe('RateLimitService', () => {
     }
   })
 
+  it('does not turn the initial window activation into a hidden startup quota fetch', async () => {
+    vi.mocked(fetchClaudeRateLimits).mockResolvedValue(okProvider('claude', 12))
+    vi.mocked(fetchCodexRateLimits).mockResolvedValue(okProvider('codex', 24))
+    const service = new RateLimitService()
+    const window = new FakeRateLimitWindow()
+
+    service.attach(asRateLimitWindow(window))
+    service.start({ fetchImmediately: false })
+    await Promise.resolve()
+
+    window.emit('show')
+    window.emit('focus')
+    window.emit('restore')
+    await Promise.resolve()
+
+    expect(fetchClaudeRateLimits).not.toHaveBeenCalled()
+    expect(fetchCodexRateLimits).not.toHaveBeenCalled()
+
+    await service.refresh()
+
+    expect(fetchClaudeRateLimits).toHaveBeenCalledTimes(1)
+    expect(fetchCodexRateLimits).toHaveBeenCalledTimes(1)
+
+    service.stop()
+  })
+
   it('keeps recent stale data across repeated failures', async () => {
     const service = new RateLimitService()
     const internal = serviceInternals(service)

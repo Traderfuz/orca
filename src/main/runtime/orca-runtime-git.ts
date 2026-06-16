@@ -4,6 +4,8 @@ import type {
   GitCommitCompareResult,
   GitConflictOperation,
   GitDiffResult,
+  GitForkSyncExpectedUpstream,
+  GitForkSyncResult,
   GitPushTarget,
   GitStatusResult,
   GitUpstreamStatus,
@@ -16,9 +18,12 @@ import type {
 import type { CommitMessageDraftContext } from '../../shared/commit-message-generation'
 import { getCommitMessageModelDiscoveryHostKey } from '../../shared/commit-message-host-key'
 import type { GitHistoryOptions, GitHistoryResult } from '../../shared/git-history'
-import { mergeLegacyCommitMessageAiIntoSourceControlAi } from '../../shared/source-control-ai'
+import {
+  mergeLegacyCommitMessageAiIntoSourceControlAi,
+  type ResolvedSourceControlAiGenerationParams
+} from '../../shared/source-control-ai'
 import type { SourceControlAiOperation } from '../../shared/source-control-ai-types'
-import { getRemoteFileUrl } from '../git/repo'
+import { getRemoteCommitUrl, getRemoteFileUrl } from '../git/repo'
 import {
   abortMerge,
   abortRebase,
@@ -38,9 +43,12 @@ import {
   stageFile,
   unstageFile
 } from '../git/status'
+import { checkoutBranch, listLocalBranches } from '../git/checkout'
+import type { RuntimeGitCheckoutResult, RuntimeGitLocalBranches } from '../../shared/runtime-types'
 import { getHistory as getGitHistory } from '../git/history'
 import { getUpstreamStatus } from '../git/upstream'
 import { gitFastForward, gitFetch, gitPull, gitPullRebaseFromBase, gitPush } from '../git/remote'
+import { gitSyncForkDefaultBranch } from '../git/fork-sync'
 import {
   getSshGitProvider,
   SSH_GIT_PROVIDER_UNAVAILABLE_MESSAGE
@@ -72,6 +80,7 @@ type RuntimeCommitMessageSettingsOverride = Partial<
   >
 > & {
   commitMessageDiscoveryHostKey?: string
+  sourceControlAiResolvedParams?: ResolvedSourceControlAiGenerationParams
 }
 
 function getRuntimeGitGenerationSettings(
@@ -206,6 +215,35 @@ export class RuntimeGitCommands {
     return { ok: true }
   }
 
+  async checkoutRuntimeGitBranch(
+    worktreeSelector: string,
+    branch: string
+  ): Promise<RuntimeGitCheckoutResult> {
+    const target = await this.host.resolveRuntimeGitTarget(worktreeSelector)
+    const provider = target.connectionId ? getSshGitProvider(target.connectionId) : null
+    if (target.connectionId) {
+      if (!provider) {
+        throw new Error(SSH_GIT_PROVIDER_UNAVAILABLE_MESSAGE)
+      }
+      await provider.checkoutBranch(target.worktree.path, branch)
+      return { ok: true, branch }
+    }
+    await checkoutBranch(target.worktree.path, branch)
+    return { ok: true, branch }
+  }
+
+  async listRuntimeGitLocalBranches(worktreeSelector: string): Promise<RuntimeGitLocalBranches> {
+    const target = await this.host.resolveRuntimeGitTarget(worktreeSelector)
+    const provider = target.connectionId ? getSshGitProvider(target.connectionId) : null
+    if (target.connectionId) {
+      if (!provider) {
+        throw new Error(SSH_GIT_PROVIDER_UNAVAILABLE_MESSAGE)
+      }
+      return provider.listLocalBranches(target.worktree.path)
+    }
+    return listLocalBranches(target.worktree.path)
+  }
+
   async getRuntimeGitDiff(
     worktreeSelector: string,
     filePath: string,
@@ -284,6 +322,21 @@ export class RuntimeGitCommands {
     }
     await gitFetch(target.worktree.path, pushTarget)
     return { ok: true }
+  }
+
+  async syncRuntimeGitForkDefaultBranch(
+    worktreeSelector: string,
+    expectedUpstream: GitForkSyncExpectedUpstream
+  ): Promise<GitForkSyncResult> {
+    const target = await this.host.resolveRuntimeGitTarget(worktreeSelector)
+    const provider = target.connectionId ? getSshGitProvider(target.connectionId) : null
+    if (target.connectionId) {
+      if (!provider) {
+        throw new Error(SSH_GIT_PROVIDER_UNAVAILABLE_MESSAGE)
+      }
+      return provider.syncForkDefaultBranch(target.worktree.path, expectedUpstream)
+    }
+    return gitSyncForkDefaultBranch(target.worktree.path, expectedUpstream)
   }
 
   async pullRuntimeGit(
@@ -447,16 +500,18 @@ export class RuntimeGitCommands {
     const discoveryHostKey =
       settingsOverride?.commitMessageDiscoveryHostKey ??
       getCommitMessageModelDiscoveryHostKey(target.connectionId ?? null)
-    const resolvedSettings = resolveCommitMessageSettings(
-      getRuntimeGitGenerationSettings(
-        this.host.getRuntimeSettings(),
-        settingsOverride,
-        'commitMessage'
-      ),
-      discoveryHostKey,
-      'commitMessage',
-      target.repo ?? null
-    )
+    const resolvedSettings = settingsOverride?.sourceControlAiResolvedParams
+      ? { ok: true as const, params: settingsOverride.sourceControlAiResolvedParams }
+      : resolveCommitMessageSettings(
+          getRuntimeGitGenerationSettings(
+            this.host.getRuntimeSettings(),
+            settingsOverride,
+            'commitMessage'
+          ),
+          discoveryHostKey,
+          'commitMessage',
+          target.repo ?? null
+        )
     if (!resolvedSettings.ok) {
       return { success: false, error: resolvedSettings.error }
     }
@@ -532,16 +587,18 @@ export class RuntimeGitCommands {
     const discoveryHostKey =
       settingsOverride?.commitMessageDiscoveryHostKey ??
       getCommitMessageModelDiscoveryHostKey(target.connectionId ?? null)
-    const resolvedSettings = resolveCommitMessageSettings(
-      getRuntimeGitGenerationSettings(
-        this.host.getRuntimeSettings(),
-        settingsOverride,
-        'pullRequest'
-      ),
-      discoveryHostKey,
-      'pullRequest',
-      target.repo ?? null
-    )
+    const resolvedSettings = settingsOverride?.sourceControlAiResolvedParams
+      ? { ok: true as const, params: settingsOverride.sourceControlAiResolvedParams }
+      : resolveCommitMessageSettings(
+          getRuntimeGitGenerationSettings(
+            this.host.getRuntimeSettings(),
+            settingsOverride,
+            'pullRequest'
+          ),
+          discoveryHostKey,
+          'pullRequest',
+          target.repo ?? null
+        )
     if (!resolvedSettings.ok) {
       return { success: false, error: resolvedSettings.error }
     }
@@ -765,5 +822,20 @@ export class RuntimeGitCommands {
       return provider.getRemoteFileUrl(target.worktree.path, normalizedRelativePath, line)
     }
     return getRemoteFileUrl(target.worktree.path, normalizedRelativePath, line)
+  }
+
+  async getRuntimeGitRemoteCommitUrl(
+    worktreeSelector: string,
+    sha: string
+  ): Promise<string | null> {
+    const target = await this.host.resolveRuntimeGitTarget(worktreeSelector)
+    const provider = target.connectionId ? getSshGitProvider(target.connectionId) : null
+    if (target.connectionId) {
+      if (!provider) {
+        throw new Error(SSH_GIT_PROVIDER_UNAVAILABLE_MESSAGE)
+      }
+      return provider.getRemoteCommitUrl(target.worktree.path, sha)
+    }
+    return getRemoteCommitUrl(target.worktree.path, sha)
   }
 }

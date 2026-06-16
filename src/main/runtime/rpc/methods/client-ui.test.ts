@@ -129,6 +129,7 @@ describe('client UI RPC methods', () => {
       ...getDefaultUIState(),
       rightSidebarOpen: false,
       rightSidebarTab: 'checks',
+      rightSidebarExplorerView: 'search',
       showActiveOnly: true,
       filterRepoIds: ['repo-1']
     }
@@ -142,6 +143,7 @@ describe('client UI RPC methods', () => {
       makeRequest('ui.set', {
         rightSidebarOpen: false,
         rightSidebarTab: 'checks',
+        rightSidebarExplorerView: 'search',
         showActiveOnly: true,
         hideSleepingWorkspaces: true,
         filterRepoIds: ['repo-1']
@@ -151,6 +153,7 @@ describe('client UI RPC methods', () => {
     expect(runtime.updateUIState).toHaveBeenCalledWith({
       rightSidebarOpen: false,
       rightSidebarTab: 'checks',
+      rightSidebarExplorerView: 'search',
       showActiveOnly: true,
       hideSleepingWorkspaces: true,
       filterRepoIds: ['repo-1']
@@ -185,7 +188,9 @@ describe('client UI RPC methods', () => {
         tasks: { firstInteractedAt: 100, interactionCount: 2 }
       },
       contextualToursSeenIds: ['tasks'],
-      contextualToursAutoEligible: true
+      contextualToursAutoEligible: true,
+      usageEmptyStateDismissed: true,
+      browserDefaultZoomLevel: 1.5
     }
     const runtime = {
       getRuntimeId: () => 'test-runtime',
@@ -218,7 +223,9 @@ describe('client UI RPC methods', () => {
         tasks: { firstInteractedAt: 100, interactionCount: 2 }
       },
       contextualToursSeenIds: ['tasks'],
-      contextualToursAutoEligible: true
+      contextualToursAutoEligible: true,
+      usageEmptyStateDismissed: true,
+      browserDefaultZoomLevel: 1.5
     }
     const response = await dispatcher.dispatch(makeRequest('ui.set', payload))
 

@@ -35,15 +35,30 @@ describe('terminal viewport refit', () => {
     expect(tabEffect).toContain('scheduleViewportRefit()')
   })
 
+  it('refits the PTY when terminal text scale changes', () => {
+    // Why: mobile text size must change the real PTY grid, not just scale pixels
+    // in the WebView, or wrapped CLI output diverges from what the shell sees.
+    const start = hookSource.indexOf('const prevTextScaleRef = useRef(textScale)')
+    expect(start).toBeGreaterThanOrEqual(0)
+    const textScaleEffect = hookSource.slice(start, start + 600)
+    expect(textScaleEffect).toContain('prevTextScaleRef.current === textScale')
+    expect(textScaleEffect).toContain('viewportMeasuredRef.current = false')
+    expect(textScaleEffect).toContain('scheduleViewportRefit()')
+    expect(textScaleEffect).toContain('[textScale, viewportMeasuredRef, scheduleViewportRefit]')
+  })
+
   it('is wired into the session screen', () => {
     expect(sessionSource).toContain('useTerminalViewportRefit({')
     expect(sessionSource).toContain('tabStripVisible: terminals.length > 1')
+    expect(sessionSource).toContain('textScale: terminalTextScale')
   })
 
   it('prefers the in-place updateViewport RPC over resubscribe', () => {
     const rpcIndex = hookSource.indexOf("sendRequest('terminal.updateViewport'")
+    const cacheUpdateIndex = hookSource.indexOf('updateTerminalSubscriptionViewport(handle, dims)')
     const resubscribeIndex = hookSource.indexOf('subscribeToTerminal(handle)')
     expect(rpcIndex).toBeGreaterThanOrEqual(0)
+    expect(cacheUpdateIndex).toBeGreaterThan(rpcIndex)
     expect(resubscribeIndex).toBeGreaterThan(rpcIndex)
   })
 

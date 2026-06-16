@@ -1,7 +1,8 @@
 /* eslint-disable max-lines */
-import { ipcMain, shell } from 'electron'
-import { readdir, readFile, writeFile, stat, lstat, open } from 'fs/promises'
-import { extname, resolve } from 'path'
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { readdir, readFile, writeFile, stat, lstat, open, rename, rm } from 'fs/promises'
+import { randomUUID } from 'crypto'
+import { dirname, extname, join, resolve } from 'path'
 import type { ChildProcess } from 'child_process'
 import { gitExecFileAsync, wslAwareSpawn } from '../git/runner'
 import { parseWslPath, toWindowsWslPath } from '../wsl'
@@ -12,6 +13,9 @@ import type {
   GitCommitCompareResult,
   GitConflictOperation,
   GitDiffResult,
+  GitForkSyncExpectedUpstream,
+  GitForkSyncResult,
+  GlobalSettings,
   GitPushTarget,
   GitUpstreamStatus,
   GitStatusResult,
@@ -65,11 +69,18 @@ import {
 import { getPullRequestDraftContext } from '../text-generation/pull-request-context'
 import { getUpstreamStatus } from '../git/upstream'
 import { gitFastForward, gitFetch, gitPull, gitPullRebaseFromBase, gitPush } from '../git/remote'
+import { gitSyncForkDefaultBranch } from '../git/fork-sync'
+import { validateGitForkSyncExpectedUpstream } from '../../shared/git-fork-sync'
 import { checkIgnoredPaths } from '../git/check-ignored-paths'
+import {
+  appendFolderToGitignore,
+  findKnownHugeFolderPathsToIgnore
+} from '../git/huge-folder-ignore'
 import { assertGitPushTargetShape } from '../../shared/git-push-target-validation'
 import { getCommitMessageModelDiscoveryHostKey } from '../../shared/commit-message-host-key'
+import type { ResolvedSourceControlAiGenerationParams } from '../../shared/source-control-ai'
 import { validateGitPushTarget } from '../git/push-target-validation'
-import { getRemoteFileUrl } from '../git/repo'
+import { getRemoteCommitUrl, getRemoteFileUrl } from '../git/repo'
 import {
   resolveAuthorizedPath,
   resolveRegisteredWorktreePath,
@@ -96,6 +107,7 @@ import {
 } from '../text-generation/commit-message-agent-environment'
 import { listRepoWorktrees } from '../repo-worktrees'
 import { splitWorktreeId } from '../../shared/worktree-id'
+import { getRuntimePathBasename } from '../../shared/cross-platform-path'
 
 // Why: Monaco has large-file optimizations like VS Code; blocking at 5MB makes
 // ordinary JSON/log files inaccessible before the editor can degrade features.
@@ -120,6 +132,93 @@ const PREVIEWABLE_BINARY_MIME_TYPES: Record<string, string> = {
   '.bmp': 'image/bmp',
   '.ico': 'image/x-icon',
   '.pdf': 'application/pdf'
+}
+const WINDOWS_RESERVED_LOCAL_BASENAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
+const LOCAL_FILENAME_REPLACEMENT_CHARS = new Set(['<', '>', ':', '"', '/', '\\', '|', '?', '*'])
+
+type DownloadFileResult = { canceled: true } | { canceled: false; destinationPath: string }
+
+function validateRequiredString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`${label} is required`)
+  }
+  return value
+}
+
+function sanitizeSaveDialogFilename(remoteBasename: string): string {
+  const sanitized = Array.from(remoteBasename, (char) =>
+    char.charCodeAt(0) < 32 || LOCAL_FILENAME_REPLACEMENT_CHARS.has(char) ? '_' : char
+  )
+    .join('')
+    .replace(/[. ]+$/g, '')
+  if (!sanitized || WINDOWS_RESERVED_LOCAL_BASENAME.test(sanitized)) {
+    return 'download'
+  }
+  return sanitized
+}
+
+function createSiblingTransferPath(destinationPath: string, suffix: string): string {
+  return join(dirname(destinationPath), `.${randomUUID()}.${suffix}`)
+}
+
+async function cleanupLocalTransferPath(filePath: string | null): Promise<void> {
+  if (!filePath) {
+    return
+  }
+  await rm(filePath, { force: true }).catch(() => {})
+}
+
+async function inspectDownloadDestination(destinationPath: string): Promise<{ existed: boolean }> {
+  try {
+    const destinationStat = await stat(destinationPath)
+    if (destinationStat.isDirectory()) {
+      throw new Error('Cannot download to a directory')
+    }
+    return { existed: true }
+  } catch (error) {
+    if (isENOENT(error)) {
+      return { existed: false }
+    }
+    throw error
+  }
+}
+
+async function assertDestinationStillUnclaimed(destinationPath: string): Promise<void> {
+  try {
+    await stat(destinationPath)
+  } catch (error) {
+    if (isENOENT(error)) {
+      return
+    }
+    throw error
+  }
+  throw new Error('Destination file appeared before download completed')
+}
+
+async function promoteDownloadedFile(
+  tempPath: string,
+  destinationPath: string,
+  destinationExisted: boolean
+): Promise<void> {
+  if (!destinationExisted) {
+    await assertDestinationStillUnclaimed(destinationPath)
+    await rename(tempPath, destinationPath)
+    return
+  }
+
+  const backupPath = createSiblingTransferPath(destinationPath, 'backup')
+  let backupCreated = false
+  try {
+    await rename(destinationPath, backupPath)
+    backupCreated = true
+    await rename(tempPath, destinationPath)
+    await cleanupLocalTransferPath(backupPath)
+  } catch (error) {
+    if (backupCreated) {
+      await rename(backupPath, destinationPath).catch(() => {})
+    }
+    throw error
+  }
 }
 
 function comparableLocalPath(value: string): string {
@@ -379,6 +478,50 @@ export function registerFilesystemHandlers(
       }
 
       return { content: buffer.toString('utf-8'), isBinary: false }
+    }
+  )
+
+  ipcMain.handle(
+    'fs:downloadFile',
+    async (
+      event,
+      args: { filePath?: string; connectionId?: string }
+    ): Promise<DownloadFileResult> => {
+      const filePath = validateRequiredString(args?.filePath, 'filePath')
+      const connectionId = validateRequiredString(args?.connectionId, 'connectionId')
+      const provider = requireSshFilesystemProvider(connectionId)
+      const remoteStat = await provider.stat(filePath)
+      if (remoteStat.type === 'directory') {
+        throw new Error('Cannot download a directory')
+      }
+      if (!provider.downloadFile) {
+        throw new Error('Remote file download is unavailable. Reconnect the SSH target and retry.')
+      }
+
+      const remoteBasename = getRuntimePathBasename(filePath)
+      const defaultPath = sanitizeSaveDialogFilename(remoteBasename)
+      const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined
+      const dialogResult = parentWindow
+        ? await dialog.showSaveDialog(parentWindow, { defaultPath })
+        : await dialog.showSaveDialog({ defaultPath })
+      if (dialogResult.canceled || !dialogResult.filePath) {
+        return { canceled: true }
+      }
+
+      const destinationPath = dialogResult.filePath
+      const { existed } = await inspectDownloadDestination(destinationPath)
+      const tempPath = createSiblingTransferPath(destinationPath, 'download')
+      let promoted = false
+      try {
+        await provider.downloadFile(filePath, tempPath)
+        await promoteDownloadedFile(tempPath, destinationPath, existed)
+        promoted = true
+        return { canceled: false, destinationPath }
+      } finally {
+        if (!promoted) {
+          await cleanupLocalTransferPath(tempPath)
+        }
+      }
     }
   )
 
@@ -689,6 +832,26 @@ export function registerFilesystemHandlers(
     }
   )
 
+  // Why: when status hits the entry limit, the SCM view offers to .gitignore the
+  // folder that's flooding it. These two handlers back that flow. Local-only:
+  // the huge-untracked-folder case is a local-dev pathology, and routing a
+  // .gitignore write through the SSH provider isn't worth the surface here.
+  ipcMain.handle(
+    'git:findHugeFoldersToIgnore',
+    async (_event, args: { worktreePath: string }): Promise<string[]> => {
+      const worktreePath = await resolveRegisteredWorktreePath(args.worktreePath, store)
+      return findKnownHugeFolderPathsToIgnore(worktreePath)
+    }
+  )
+
+  ipcMain.handle(
+    'git:appendGitignore',
+    async (_event, args: { worktreePath: string; folderName: string }): Promise<boolean> => {
+      const worktreePath = await resolveRegisteredWorktreePath(args.worktreePath, store)
+      return appendFolderToGitignore(worktreePath, args.folderName)
+    }
+  )
+
   ipcMain.handle(
     'git:history',
     async (
@@ -819,15 +982,28 @@ export function registerFilesystemHandlers(
         worktreePath: string
         repoId?: string
         connectionId?: string
+        sourceControlAiResolvedParams?: ResolvedSourceControlAiGenerationParams
+        sourceControlAi?: GlobalSettings['sourceControlAi']
+        agentCmdOverrides?: GlobalSettings['agentCmdOverrides']
       }
     ): Promise<GenerateCommitMessageResult> => {
       const discoveryHostKey = getCommitMessageModelDiscoveryHostKey(args.connectionId ?? null)
-      const resolvedSettings = resolveCommitMessageSettings(
-        store.getSettings(),
-        discoveryHostKey,
-        'commitMessage',
-        await getRepoForSourceControlAi(store, args)
-      )
+      const baseSettings = store.getSettings()
+      const requestSettings = {
+        ...baseSettings,
+        ...(args.sourceControlAi !== undefined ? { sourceControlAi: args.sourceControlAi } : {}),
+        ...(args.agentCmdOverrides !== undefined
+          ? { agentCmdOverrides: args.agentCmdOverrides }
+          : {})
+      }
+      const resolvedSettings = args.sourceControlAiResolvedParams
+        ? { ok: true as const, params: args.sourceControlAiResolvedParams }
+        : resolveCommitMessageSettings(
+            requestSettings,
+            discoveryHostKey,
+            'commitMessage',
+            await getRepoForSourceControlAi(store, args)
+          )
       if (!resolvedSettings.ok) {
         return { success: false, error: resolvedSettings.error }
       }
@@ -955,15 +1131,28 @@ export function registerFilesystemHandlers(
         body: string
         draft: boolean
         connectionId?: string
+        sourceControlAiResolvedParams?: ResolvedSourceControlAiGenerationParams
+        sourceControlAi?: GlobalSettings['sourceControlAi']
+        agentCmdOverrides?: GlobalSettings['agentCmdOverrides']
       }
     ): Promise<GeneratePullRequestFieldsResult> => {
       const discoveryHostKey = getCommitMessageModelDiscoveryHostKey(args.connectionId ?? null)
-      const resolvedSettings = resolveCommitMessageSettings(
-        store.getSettings(),
-        discoveryHostKey,
-        'pullRequest',
-        await getRepoForSourceControlAi(store, args)
-      )
+      const baseSettings = store.getSettings()
+      const requestSettings = {
+        ...baseSettings,
+        ...(args.sourceControlAi !== undefined ? { sourceControlAi: args.sourceControlAi } : {}),
+        ...(args.agentCmdOverrides !== undefined
+          ? { agentCmdOverrides: args.agentCmdOverrides }
+          : {})
+      }
+      const resolvedSettings = args.sourceControlAiResolvedParams
+        ? { ok: true as const, params: args.sourceControlAiResolvedParams }
+        : resolveCommitMessageSettings(
+            requestSettings,
+            discoveryHostKey,
+            'pullRequest',
+            await getRepoForSourceControlAi(store, args)
+          )
       if (!resolvedSettings.ok) {
         return { success: false, error: resolvedSettings.error }
       }
@@ -1136,6 +1325,31 @@ export function registerFilesystemHandlers(
         await validateGitPushTarget(worktreePath, args.pushTarget)
       }
       await gitFetch(worktreePath, args.pushTarget)
+    }
+  )
+
+  ipcMain.handle(
+    'git:syncFork',
+    async (
+      _event,
+      args: {
+        worktreePath: string
+        connectionId?: string
+        expectedUpstream: GitForkSyncExpectedUpstream
+      }
+    ): Promise<GitForkSyncResult> => {
+      const expectedUpstream = validateGitForkSyncExpectedUpstream(args.expectedUpstream, {
+        required: true
+      })
+      if (args.connectionId) {
+        const provider = getSshGitProvider(args.connectionId)
+        if (!provider) {
+          throw new Error(SSH_GIT_PROVIDER_UNAVAILABLE_MESSAGE)
+        }
+        return provider.syncForkDefaultBranch(args.worktreePath, expectedUpstream)
+      }
+      const worktreePath = await resolveRegisteredWorktreePath(args.worktreePath, store)
+      return gitSyncForkDefaultBranch(worktreePath, expectedUpstream)
     }
   )
 
@@ -1466,6 +1680,27 @@ export function registerFilesystemHandlers(
       }
       const worktreePath = await resolveRegisteredWorktreePath(args.worktreePath, store)
       return getRemoteFileUrl(worktreePath, args.relativePath, args.line)
+    }
+  )
+
+  ipcMain.handle(
+    'git:remoteCommitUrl',
+    async (
+      _event,
+      args: { worktreePath: string; sha: string; connectionId?: string }
+    ): Promise<string | null> => {
+      const sha = validateFullGitObjectId(args.sha, 'sha')
+      // Why: remote repos can't read relay-side .git/config locally. Delegate
+      // URL construction to the SSH provider, which can fetch remote metadata.
+      if (args.connectionId) {
+        const provider = getSshGitProvider(args.connectionId)
+        if (!provider) {
+          throw new Error(SSH_GIT_PROVIDER_UNAVAILABLE_MESSAGE)
+        }
+        return provider.getRemoteCommitUrl(args.worktreePath, sha)
+      }
+      const worktreePath = await resolveRegisteredWorktreePath(args.worktreePath, store)
+      return getRemoteCommitUrl(worktreePath, sha)
     }
   )
 }

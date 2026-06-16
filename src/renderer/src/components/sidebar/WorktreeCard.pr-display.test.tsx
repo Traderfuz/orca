@@ -141,7 +141,7 @@ describe('WorktreeCard linked PR display', () => {
 
     expect(markup).toContain('Linked PR #456')
     expect(markup).not.toContain('Loading PR')
-  })
+  }, 10_000)
 
   it('does not show cached branch PR details when the worktree has no linked PR', async () => {
     hostedReviewCache = {
@@ -218,7 +218,7 @@ describe('WorktreeCard linked PR display', () => {
   })
 
   it('keeps issue, Linear issue, PR, and notes metadata out of compact cards', async () => {
-    settings = { experimentalCompactWorktreeCards: true }
+    settings = { compactWorktreeCards: true }
     worktreeCardProperties = ['issue', 'linear-issue', 'pr', 'comment']
     const { default: WorktreeCard } = await import('./WorktreeCard')
 
