@@ -1,0 +1,25 @@
+schema_version: 1
+id: session-start
+name: Session Start
+description: Orient a new session — daily review, project status, and next-action routing.
+category: maintenance
+skills:
+  - daily-start
+  - project-status
+  - orchestrate
+confirm: false
+clients:
+  - claude-code
+  - codex
+  - gemini
+  - opencode
+  - pi
+  - zed
+intent_keywords:
+  - session start
+  - start session
+  - orient
+  - daily start
+  - what to work on
+  - begin work
+source_doc: docs/guides/chains.md

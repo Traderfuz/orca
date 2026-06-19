@@ -1,0 +1,32 @@
+schema_version: 1
+id: deploy-onboarding
+name: Deploy Onboarding
+description: "New Project Deploy Onboarding: initialize DevOS, configure deployment infrastructure, validate readiness."
+category: development
+confirm: false
+worktree_policy_exception: bootstrap-deploy
+model_route: standard
+clients:
+  - claude-code
+  - codex
+  - gemini
+  - opencode
+  - pi
+  - zed
+skills:
+  - devos-init
+  - setup-deploy
+  - dev-db-scaffold
+  - predeploy-check
+  - {name: commit, args: "--all"}
+intent_keywords:
+  - onboard
+  - bootstrap
+  - deploy
+  - setup
+  - initialize
+  - new project
+  - configure deploy
+  - deployment infra
+  - scaffold dev database
+  - local dev db

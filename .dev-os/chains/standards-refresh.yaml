@@ -1,0 +1,28 @@
+schema_version: 1
+id: standards-refresh
+name: Standards Refresh
+description: Re-extract and validate standards in an isolated worktree, then refresh generated context.
+category: maintenance
+skills:
+  - {name: work-intake-preflight, args: "--auto"}
+  - worktrees
+  - checkpoint
+  - worktree-sessions
+  - extract-standards
+  - standards-validator
+  - context-full-refresh
+  - {name: commit, args: "--all"}
+confirm: false
+clients:
+  - claude-code
+  - codex
+  - gemini
+  - opencode
+  - pi
+  - zed
+intent_keywords:
+  - standards
+  - validate
+  - refresh
+  - profile
+source_doc: profiles/general/workflows/pipelines/standards-refresh.md

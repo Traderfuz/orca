@@ -1,0 +1,32 @@
+schema_version: 1
+id: security-hardening
+name: Security Hardening
+description: Full security posture pass from an isolated worktree — audit deps first to surface vulnerable packages, then review code with that context, validate standards, and devos-verify.
+category: development
+skills:
+  - {name: work-intake-preflight, args: "--auto"}
+  - worktrees
+  - checkpoint
+  - worktree-sessions
+  - audit-deps
+  - devos-security-review
+  - standards-validator
+  - {name: commit, args: "--all"}
+  - devos-verify
+confirm: false
+model_route: complex
+clients:
+  - claude-code
+  - codex
+  - gemini
+  - opencode
+  - pi
+  - zed
+intent_keywords:
+  - security
+  - security review
+  - security hardening
+  - audit deps
+  - harden security
+  - security pass
+source_doc: docs/guides/chains.md

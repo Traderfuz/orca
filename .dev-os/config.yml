@@ -1,0 +1,249 @@
+# DevOS Project Configuration
+# Edit this file to change defaults for new projects.
+# Applied by write_project_config() in scripts/lib/config-writer.sh.
+# Source: scripts/template-project-config.yml
+
+profile: general
+version: 1.0.0
+runtime_state_root:
+
+# Execution mode — determines how skills, chains, and agents select models.
+#   eco     — cost-optimised: routes by complexity tier (simple→Haiku, standard→Sonnet, complex→Opus)
+#   sonnet  — all work runs on Sonnet regardless of complexity
+#   advisor — the active CLI session model is the "orchestrator"; it can escalate to a stronger
+#             "consultant" model for hard decisions (see advisor_mode below)
+#   agent   — work is dispatched to external CLI agents (Codex, OpenCode, etc.) via agent_dispatch
+#   full    — reserved, not yet implemented
+mode: advisor
+
+# Lifecycle stage. Values: prelaunch | live. Updated by the go-live skill.
+lifecycle: prelaunch
+
+orchestrator:
+  # advise    — prompts before autonomous actions (safe default for new projects)
+  # triage    — routes autonomously without confirmation prompts
+  # autonomous — executes auto-actionable pipelines; pauses only at hard guardrails
+  mode: advise
+
+# ─── Provider & Model Tiers ───────────────────────────────────────────────────
+# eco_tiers define the model used at each complexity level when mode=eco.
+# eco_threshold_simple/complex set the complexity score boundaries (0–100):
+#   score ≤ simple  → simple tier
+#   score ≥ complex → complex tier
+#   otherwise       → standard tier
+providers:
+  default: claude
+  eco_tiers:
+    simple: claude-haiku-4-5-20251001
+    standard: claude-sonnet-4-6
+    complex: claude-opus-4-8
+  eco_threshold_simple: 20
+  eco_threshold_complex: 70
+
+# ─── Agent Dispatch ───────────────────────────────────────────────────────────
+# Controls which CLI runtime executes dispatched agent work (mode=agent or /agent-dispatch).
+#   default_runtime        — fallback runtime for any dispatched task
+#   implementation_runtime — runtime for code-writing tasks (implement-tasks, quick-fix)
+#   review_runtime         — runtime for review tasks (code-review, security-review)
+#   probe_precedence       — when runtime is "auto", probe these CLIs in order; first available wins
+#   fallback_runtime       — used when no probed CLI responds within probe_timeout_seconds
+agent_dispatch:
+  default_runtime: claude-agent
+  implementation_runtime: claude-agent
+  review_runtime: claude-agent
+  probe_precedence: [codex, opencode, hermes, claude-headless]
+  fallback_runtime: claude-agent
+  probe_timeout_seconds: 5
+  require_diff_review_for_non_claude: true
+
+# ─── CLI Client Detection ─────────────────────────────────────────────────────
+# Which CLI tool is running this session.
+#   active: auto — detect from environment; or set explicitly to a client name.
+#   detection_precedence — order to probe when active=auto.
+# Known clients: pi (Orca/Pi terminal), claude-code, codex (OpenAI Codex CLI),
+#   opencode, hermes (Google AI CLI)
+cli_clients:
+  active: auto
+  detection_precedence: [pi, claude-code, codex, opencode, hermes]
+
+# ─── Model Connections ────────────────────────────────────────────────────────
+# Named connection aliases mapping a label → (CLI client + model ID).
+# routing_modes reference these labels to resolve which CLI + model handles each tier.
+#
+# Example: "claude-sonnet" means "run on Claude Code with claude-sonnet-4-6"
+#          "codex-standard" means "run on Codex CLI with its default model"
+#          "pi-default" means "run on Orca/Pi CLI with its default model"
+model_connections:
+  claude-sonnet:
+    client: claude-code       # Claude Code CLI (interactive or headless)
+    connection: default
+    model: claude-sonnet-4-6
+  claude-opus:
+    client: claude-code       # Claude Code CLI
+    connection: default
+    model: claude-opus-4-8
+  codex-standard:
+    client: codex             # OpenAI Codex CLI
+    connection: default
+    model: default            # uses whatever model Codex is configured with
+  pi-default:
+    client: pi                # Orca/Pi terminal CLI
+    connection: default
+    model: default            # uses Orca's configured model
+
+# ─── Routing Modes ────────────────────────────────────────────────────────────
+# Per execution mode, maps each complexity tier (simple/standard/complex) to a
+# model_connection label. This is how "mode + complexity" resolves to a specific
+# CLI client and model.
+#
+# Example flow: mode=advisor, skill rated "complex"
+#   → routing_modes.advisor.complex → "claude-opus"
+#   → model_connections.claude-opus → Claude Code CLI + claude-opus-4-8
+routing_modes:
+  eco:
+    simple: pi-default          # cheap tasks → Orca/Pi
+    standard: claude-sonnet     # mid tasks → Claude Code + Sonnet
+    complex: claude-opus        # hard tasks → Claude Code + Opus
+  agent:
+    simple: pi-default          # cheap tasks → Orca/Pi
+    standard: codex-standard    # mid tasks → Codex CLI
+    complex: claude-opus        # hard tasks → Claude Code + Opus
+  advisor:
+    simple: pi-default          # cheap tasks → Orca/Pi
+    standard: claude-sonnet     # mid tasks → Claude Code + Sonnet
+    complex: claude-opus        # hard tasks → Claude Code + Opus
+
+# ─── Skill / Chain / Agent Routes ─────────────────────────────────────────────
+# Map individual skills, chains, and agent roles to complexity tiers.
+# The tier then resolves through routing_modes → model_connections → CLI + model.
+skill_routes:
+  quick-fix: simple
+  implement-tasks: standard
+  gap-analysis: complex
+  code-review: complex
+  devos-security-review: complex
+
+chain_routes:
+  feature-branch-lifecycle: standard
+  build-slice: standard
+  maintenance-session: standard
+  security-hardening: complex
+  project-audit: complex
+  convergence: standard
+  deliver-product-slice: standard
+  deploy-onboarding: standard
+  design-discovery: standard
+  feature-branch: standard
+  feature-planning: standard
+  full-project-onboarding: standard
+  go-live: complex
+  package-release-readiness: standard
+  parallel-build-slice: standard
+  post-deploy-qa: standard
+  project-bootstrap: standard
+  project-complete: standard
+  refactor: standard
+  release-onboarding: standard
+  skill-authoring: standard
+visual_review_gate:
+  enabled: true
+  emit_events: true
+  auto_open: true
+  open_provider: orca
+  open_max_artifacts: 5
+
+agent_routes:
+  implementer: standard
+  code-reviewer: complex
+  security-review: complex
+  architect-review: complex
+
+# ─── Advisor Mode ─────────────────────────────────────────────────────────────
+# Only active when mode=advisor. Defines a three-tier model hierarchy:
+#
+#   orchestrator — the model running your interactive CLI session (Claude Code, Codex, etc.).
+#                  This is the primary model you talk to. It handles all routine work and
+#                  decides when to escalate.
+#
+#   consultant   — a stronger model called for high-stakes decisions (architecture choices,
+#                  security reviews, complex debugging). The orchestrator sends a focused
+#                  context slice and receives structured advice back. Capped at
+#                  max_consultant_calls per session to control cost.
+#
+#   worker       — a lighter/faster model for parallelisable subtasks (file scanning, bulk
+#                  transforms, mechanical code generation). Orchestrator fans out up to
+#                  max_worker_parallel concurrent workers.
+#
+# To change which model runs your session globally, edit orchestrator here and
+# re-run devos-init on existing projects (or manually update their .dev-os/config.yml).
+advisor_mode:
+  orchestrator: claude-sonnet-4-6
+  consultant: claude-fable-5
+  worker: claude-sonnet-4-6
+  max_consultant_calls: 2          # max escalations to consultant per session
+  max_worker_parallel: 3           # max concurrent worker agents
+  max_consultant_context_tokens: 2000  # context budget sent to consultant per call
+  worker_max_tokens: 4096          # output token cap per worker response
+  consultant_max_tokens: 8192      # output token cap per consultant response
+  telemetry:
+    session_log: product/runtime/learnings-log.jsonl
+    event: advisor_session
+  sha_tool: auto
+  worker_wait_strategy: auto
+
+standards_injection:
+  enabled: true
+  mode: index
+  target: agents
+  injection_mode: on-demand
+  max_tokens: 100000
+  priority: [global, maintenance, product, testing, backend, deployment, agents, skills]
+  categories:
+    agents: false  # intentionally disabled — token budget (enable when working on agent architecture)
+    skills: false   # intentionally disabled — token budget (enable when authoring/auditing skills)
+
+bundles_injection:
+  enabled: true
+  mode: index
+  target: agents
+  injection_mode: on-demand
+
+claude_brief:
+  enabled: true
+  guidance_path: docs/context/DEVOS_PROJECT_GUIDANCE.md
+  target: CLAUDE.md
+
+codebase_map:
+  enabled: true
+  mode: index
+  target: agents
+  # injection_mode controls WHEN the codebase map is injected into model context.
+  # Values: always (every turn) | on-demand (only when edit/fix/implement signals detected)
+  injection_mode: on-demand
+
+# Index injection controls — each index has an independent injection mode.
+# mode values: always (every turn) | on-demand (trigger-gated, flag persists in session)
+# on-demand saves ~10K–15K tokens per non-routing session by deferring until needed.
+skills_index:
+  enabled: true
+  target: agents
+  injection_mode: on-demand # triggered by: prompt starting with /, skill name, or active_spec set
+
+chains_index:
+  enabled: true
+  target: both
+  injection_mode: on-demand # triggered by: same triggers as skills_index
+
+workflows_index:
+  enabled: true
+  target: agents
+  injection_mode: on-demand # triggered by: 'pipeline', 'workflow', or known workflow keyword
+
+os_packages_index:
+  enabled: true
+  target: both
+  injection_mode: on-demand # triggered by: /cos-*, /mos-*, /ros-* prefix or 'os-route'
+project: orca
+flowstate:
+  enabled: true
+  project: orca

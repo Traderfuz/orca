@@ -1,0 +1,45 @@
+schema_version: 1
+id: design-improvement
+name: Design Improvement
+description: Improve an implemented UI from an isolated worktree through journey and IA audit, live gap and placement analysis, iterative screenshot-based refinement, preflight validation, and design QA.
+category: testing
+skills:
+  - {name: work-intake-preflight, args: "--auto"}
+  - worktrees
+  - checkpoint
+  - worktree-sessions
+  - { name: ui-journey-audit, args: "--mode audit --dalio --converge" }
+  - { name: ui-gap-analysis, args: "--dalio --converge --fix" }
+  - { name: ui-placement-audit, args: "--dalio --clickthrough --converge --fix" }
+  - ux-audit
+  - ui-design-iteration
+  - ui-preflight
+  - dev-server
+  - playwright-cli
+  - ui-design-qa
+  - visual-regression-qa
+  - { name: commit, args: "--all" }
+  - dogfood
+confirm: false
+clients:
+  - claude-code
+  - codex
+  - gemini
+  - opencode
+  - pi
+  - zed
+intent_keywords:
+  - improve design
+  - improve ui
+  - make this page look better
+  - design polish pass
+  - ui polish
+  - iterate on design
+  - fix visual gaps
+  - fix placement gaps
+  - audit ui placement
+  - audit ui journey
+  - audit navigation flow
+  - audit information architecture
+  - improve frontend design
+source_doc: docs/guides/chains.md

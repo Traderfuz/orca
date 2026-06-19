@@ -1,0 +1,34 @@
+schema_version: 1
+id: design-system-hardening
+name: Design System Hardening
+description: Audit, align, and devos-verify design-token adoption from an isolated worktree before release so UI changes stay consistent across brand, code, and visual regression baselines.
+category: testing
+skills:
+  - {name: work-intake-preflight, args: "--auto"}
+  - worktrees
+  - checkpoint
+  - worktree-sessions
+  - ui-design-system-audit
+  - ui-design-alignment
+  - ui-preflight
+  - dev-server
+  - visual-regression-qa
+  - {name: commit, args: "--all"}
+  - devos-verify
+confirm: true
+clients:
+  - claude-code
+  - codex
+  - gemini
+  - opencode
+  - pi
+  - zed
+intent_keywords:
+  - harden design system
+  - audit design system
+  - token adoption audit
+  - align design tokens
+  - fix design drift
+  - check visual consistency
+  - design system release check
+source_doc: docs/guides/chains.md

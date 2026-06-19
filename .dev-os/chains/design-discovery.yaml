@@ -1,0 +1,35 @@
+schema_version: 1
+id: design-discovery
+name: Design Discovery
+description: Shape a new UI direction before implementation by mapping journeys, drafting visual concepts, generating a design system, and validating the design baseline.
+category: development
+skills:
+  - { name: work-intake-preflight, args: "--auto" }
+  - worktrees
+  - checkpoint
+  - worktree-sessions
+  - ui-journey-audit
+  - frontend-design
+  - ai-design-draft
+  - ui-superdesign
+  - ui-design-system
+  - ui-review
+  - {name: commit, args: "--all"}
+confirm: false
+model_route: standard
+clients:
+  - claude-code
+  - codex
+  - gemini
+  - opencode
+  - pi
+  - zed
+intent_keywords:
+  - design discovery
+  - design this page
+  - create visual direction
+  - plan ui design
+  - design before implementation
+  - create design baseline
+  - generate design system from brief
+source_doc: docs/guides/chains.md

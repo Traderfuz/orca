@@ -1,0 +1,47 @@
+schema_version: 1
+id: project-bootstrap
+name: Project Bootstrap
+description: >-
+  Full first-time project setup: initialize DevOS, extract and apply standards,
+  plan the product, audit dependencies, configure deployment infrastructure,
+  scaffold the isolated dev database, register auth providers, run gap analysis,
+  validate readiness, and deploy. Use this chain when starting any new project
+  from scratch. Covers dev environment, production environment, and quality gates
+  in one canonical sequence.
+category: development
+confirm: false
+worktree_policy_exception: bootstrap
+model_route: standard
+clients:
+  - claude-code
+  - codex
+  - gemini
+  - opencode
+  - pi
+  - zed
+skills:
+  - devos-init
+  - extract-standards
+  - plan-product
+  - audit-deps
+  - setup-deploy
+  - dev-db-scaffold
+  - setup-auth-providers
+  - gap-analysis
+  - predeploy-check
+  - {name: commit, args: "--all"}
+  - deploy
+intent_keywords:
+  - first project setup
+  - bootstrap project
+  - new project from scratch
+  - scaffold project
+  - full project setup
+  - setup new project
+  - initialize everything
+  - project bootstrap
+  - start new project
+  - onboard new project
+  - new app setup
+  - full onboarding
+source_doc: docs/guides/chains.md

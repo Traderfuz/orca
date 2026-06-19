@@ -93,6 +93,9 @@ docs/reference/react-performance-audit.md
 validation-screenshots/
 .stably-browser
 
+# Local Orca install used for patched AppImage smoke tests.
+/.local/
+
 # PR verification evidence screenshots are referenced from notes but should not
 # be committed.
 notes/artifacts/
@@ -115,3 +118,33 @@ src/renderer/src/i18n/locales/.zh-catalog-cache.json
 src/renderer/src/i18n/locales/.ko-catalog-cache.json
 src/renderer/src/i18n/locales/.ja-catalog-cache.json
 src/renderer/src/i18n/locales/.es-catalog-cache.json
+
+
+# DevOS runtime artifacts (generated — do not track)
+# Runtime/ is NOT ignored as a directory — specific ephemeral files are enumerated.
+# This keeps context-ledger.json and context-refresh-state.json tracked for portability.
+.dev-os/runtime/session-state.yml
+.dev-os/runtime/os-handoff-state.json
+.dev-os/logs/
+.dev-os/cache/
+.dev-os/patches/
+.dev-os/reports/
+.dev-os/sessions/
+.dev-os/checkpoints/
+.dev-os/profile
+.dev-os/README.md
+.dev-os/.claude/
+
+# DevOS standards
+.dev-os/standards/auth/
+.dev-os/standards/backend/
+.dev-os/standards/cli/
+.dev-os/standards/deployment/
+.dev-os/standards/frontend/
+.dev-os/standards/integration/
+.dev-os/standards/architecture/
+.dev-os/standards/testing/
+.dev-os/standards/global/
+.dev-os/standards/profile/
+.dev-os/standards/.last-extracted
+.dev-os/standards/.profile-sync

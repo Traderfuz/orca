@@ -1,0 +1,341 @@
+# KIMI.md — DevOS Context for Kimi CLI
+
+This project uses **DevOS** (Development Operating System) for standardised
+AI-assisted development workflows.
+
+## Available DevOS Commands
+
+- `write-spec` — Write technical specifications
+- `create-tasks` — Break specs into actionable tasks
+- `implement-tasks` — Execute implementation tasks
+- `review` — Code review with quality checks
+- `project-status` — Show implementation progress
+- `quick-fix` — Apply small fixes without full spec workflow
+- `merge-feature` — Merge feature branch with changelog update
+- `checkpoint` — Save implementation progress checkpoint
+
+## MCP Servers
+
+The following MCP servers are configured via DevOS
+(`product/runtime/reports/kimi-mcp-config.json`):
+
+- `mcp-hub`
+- `memory-mcp`
+- `reflection-mcp`
+- `review-gate`
+- `trace-mcp`
+
+## Skills
+
+DevOS skills available via `--skills-dir ~/.dev-os/integrations/kimi/skills`:
+
+- `abort`
+- `add-cli`
+- `adr`
+- `agent-browser`
+- `agent-dispatch`
+- `ai-design-draft`
+- `ai-pdf-design`
+- `ai-sdk-api`
+- `ai-sdk`
+- `ai-slop-polish`
+- `ai-style-system`
+- `apify`
+- `apple-notes`
+- `apple-reminders`
+- `architecture-creator`
+- `ascii-art`
+- `ascii-video`
+- `audit-deps`
+- `audit-docs`
+- `auth-download`
+- `authority-intelligence`
+- `autonomous-ai-agents`
+- `autonomous-session-orchestration`
+- `autonomous`
+- `autoresearch`
+- `blogwatcher`
+- `brainstorm`
+- `browser-cdp`
+- `bundle-manager`
+- `bx-agent-creator`
+- `bx-architecture-extractor`
+- `bx-chain-manager`
+- `bx-command-creator`
+- `bx-keepalive-add`
+- `bx-pipeline-creator`
+- `bx-runbook-creator`
+- `bx-skill-creator`
+- `bx-standards-creator`
+- `bx-voice-agent-creator`
+- `bx-workflow-creator`
+- `capture`
+- `caveman-compress`
+- `caveman`
+- `check-skills-updates`
+- `checkpoint`
+- `ci-setup`
+- `clarify`
+- `clerk-production-audit`
+- `cli-cleanup`
+- `close-all-gaps`
+- `cloudflare`
+- `commands-to-skills`
+- `commit`
+- `compound-learnings`
+- `computer-use`
+- `consume-creative`
+- `consume-design`
+- `consume-marketing`
+- `consume-research`
+- `content-to-frameworks`
+- `context-full-refresh`
+- `context-provider-settings`
+- `context-surface-audit`
+- `context7`
+- `contract-drift-audit`
+- `contribute`
+- `convex-clerk-dev-setup`
+- `convex-clerk-setup`
+- `convex-deploy`
+- `create-custom-profile`
+- `create-hook`
+- `create-pr`
+- `create-tasks`
+- `creative-ideation`
+- `cross-os-route-fix`
+- `cross-os-sync`
+- `cross-os-verify`
+- `daily-review`
+- `daily-start`
+- `dashboard`
+- `db-migrate`
+- `deliver-product-slice`
+- `deploy-guide`
+- `deploy`
+- `dev-db-scaffold`
+- `dev-server`
+- `devos-agent-report`
+- `devos-agent`
+- `devos-clear`
+- `devos-cli-creator`
+- `devos-code-review`
+- `devos-config`
+- `devos-cost`
+- `devos-doctor`
+- `devos-exit`
+- `devos-help`
+- `devos-init`
+- `devos-insights`
+- `devos-logs`
+- `devos-maintenance`
+- `devos-memory`
+- `devos-mode`
+- `devos-recover`
+- `devos-resume`
+- `devos-review`
+- `devos-scheduler`
+- `devos-security-review`
+- `devos-update`
+- `devos-verify`
+- `devos-workflows`
+- `devos`
+- `diagnose-first`
+- `dispatch`
+- `doc-coauthoring`
+- `docs-architect`
+- `docs-coverage-audit`
+- `docs-sync`
+- `docs-verify`
+- `dogfood`
+- `domain-name-brainstormer`
+- `e2e`
+- `eco`
+- `excalidraw`
+- `experiment`
+- `extract-architecture`
+- `extract-standards`
+- `extract-template`
+- `fastmcp`
+- `find-skills`
+- `findmy`
+- `firecrawl-cli`
+- `flowstate`
+- `frontend-design`
+- `gap-analysis`
+- `generate-agents-md`
+- `generate-user-flows`
+- `github-deep-research`
+- `github-docs`
+- `go-live`
+- `google-workspace`
+- `graphify`
+- `ground-truth-recon`
+- `guided-start`
+- `harden`
+- `health`
+- `himalaya`
+- `imessage`
+- `implement-tasks`
+- `implementation-review`
+- `import-skill`
+- `improve-codebase-architecture`
+- `improvement-lab`
+- `init-project-local`
+- `init-team-config`
+- `install-profile`
+- `internal-comms`
+- `issue-triage-cleanup`
+- `kilo`
+- `knowledge-pull`
+- `learnings`
+- `linear`
+- `linux-health-check`
+- `list-importable`
+- `listmonk`
+- `llm-wiki`
+- `long-running-plan`
+- `manim-video`
+- `map`
+- `mcp-builder`
+- `mcp-health`
+- `mcp-hub-context`
+- `mcp-migrator`
+- `mcp-ops`
+- `mcp-sync-cli`
+- `memory-watcher`
+- `merge-feature`
+- `module`
+- `monthly-retro`
+- `neon-postgres`
+- `new-os`
+- `normalize-structure`
+- `notepad`
+- `optimize-process`
+- `optimize`
+- `orca-workflow`
+- `orchestrate`
+- `orchestration`
+- `organize-plans`
+- `os-route`
+- `ownership-audit`
+- `p5js`
+- `pi-agent-runner`
+- `pipeline-guardian`
+- `plan-product`
+- `playwright-cli`
+- `polish`
+- `portfolio-orchestrator`
+- `portfolio`
+- `posthog`
+- `postiz`
+- `predeploy-check`
+- `process-extractor`
+- `process-optimizer`
+- `product`
+- `profile-standards-inheritance-audit`
+- `project-artifacts-audit`
+- `project-cleanup`
+- `project-complete-spec`
+- `project-complete`
+- `project-health-audit`
+- `project-local-status`
+- `project-scaffold`
+- `project-status`
+- `provider-registry`
+- `pull-shared-profiles`
+- `quick-fix`
+- `refactor`
+- `release`
+- `repair-hooks`
+- `replicate-cli`
+- `rollback-checkpoint`
+- `rotate-tokens`
+- `route-guide`
+- `runbook`
+- `runtime-diagnostics`
+- `sentry-fix-issues`
+- `session-recorder`
+- `setup-auth-providers`
+- `setup-deploy`
+- `shape-spec`
+- `ship-safely`
+- `site-audit-tester`
+- `site-audit`
+- `skill-benchmark`
+- `skill-documenter`
+- `skill-release-validator`
+- `skill-templates`
+- `songwriting-and-ai-music`
+- `standards-guide`
+- `standards-validator`
+- `start-feature`
+- `statusline`
+- `structured-note`
+- `summarize`
+- `supabase`
+- `svg-smil-animations`
+- `sync-artifacts`
+- `sync-completed-work`
+- `sync-project-local`
+- `sync-skills`
+- `sync`
+- `system-maintenance`
+- `systematic-debugging`
+- `test`
+- `testing-standards`
+- `trace`
+- `triage`
+- `ui-clone`
+- `ui-creator`
+- `ui-design-alignment`
+- `ui-design-check`
+- `ui-design-iteration`
+- `ui-design-qa`
+- `ui-design-review`
+- `ui-design-system-audit`
+- `ui-design-system-generator`
+- `ui-design-system`
+- `ui-design-verify`
+- `ui-gap-analysis`
+- `ui-journey-audit`
+- `ui-placement-audit`
+- `ui-popular-web-designs`
+- `ui-preflight`
+- `ui-review`
+- `ui-stitch-design`
+- `ui-superdesign`
+- `uninstall-project`
+- `update-oses`
+- `usability-audit`
+- `user-facing-docs`
+- `ux-audit`
+- `validate-standards`
+- `vercel`
+- `visual-architect`
+- `visual-regression-qa`
+- `web-artifacts-builder`
+- `webapp-testing`
+- `weekly-review`
+- `work-intake-preflight`
+- `work-orchestration`
+- `worktree-sessions`
+- `worktrees`
+- `write-spec`
+- `writing-plans`
+
+## Workflows
+
+Standard DevOS workflow for a new feature:
+
+```
+write-spec   →  create-tasks  →  implement-tasks
+      →  review  →  merge-feature
+```
+
+## Configuration
+
+- **Profile**: Defined in `.dev-os/config.yml`
+- **MCP config**: `product/runtime/reports/kimi-mcp-config.json`
+- **Skills dir**: `~/.dev-os/integrations/kimi/skills`
+- **DevOS docs**: `~/.dev-os/docs/`

@@ -50,3 +50,7 @@ Never commit PR evidence images; attach them to the PR conversation instead (but
 
 <!-- DEVOS_AUTO_END -->
 
+
+## Project Guidance
+
+Reference `docs/context/DEVOS_PROJECT_GUIDANCE.md` for durable project guidance used to recover the Claude operating brief.

@@ -1,0 +1,33 @@
+schema_version: 1
+id: design-qa
+name: Design QA
+description: Full isolated-worktree design verification chain — component snapshot, design reference comparison, and visual regression check before shipping UI changes.
+category: testing
+skills:
+  - {name: work-intake-preflight, args: "--auto"}
+  - worktrees
+  - checkpoint
+  - worktree-sessions
+  - dev-server
+  - playwright-cli
+  - ui-design-qa
+  - visual-regression-qa
+  - {name: commit, args: "--all"}
+  - dogfood
+confirm: false
+clients:
+  - claude-code
+  - codex
+  - gemini
+  - opencode
+  - pi
+  - zed
+intent_keywords:
+  - design qa
+  - visual qa
+  - design verification
+  - ui regression
+  - pre-release design check
+  - component visual check
+  - design review before ship
+source_doc: docs/guides/chains.md

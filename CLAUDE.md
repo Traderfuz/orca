@@ -1,4 +1,91 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+DevOS project using the **general** profile. Configuration stored in `.dev-os/config.yml`.
 @AGENTS.md
+
+<!-- DevOS:section:project-context -->
+## Project Context
+
+- **Project:** orca
+- **DevOS profile:** `general`
+<!-- /DevOS:section:project-context -->
+
+<!-- DevOS:section:conventions -->
+## Development Conventions
+
+- Check project README and CLAUDE.md for stack-specific conventions
+- **Standards:** 136 documents across `.dev-os/standards/global/` (extracted), `.dev-os/standards/profile/` (profile sync), and any project-local root standards
+<!-- /DevOS:section:conventions -->
+
+<!-- DevOS:section:safety-rules -->
+## Safety Rules
+
+- Before removing or overwriting config files, create a backup first
+- Never bulk-delete files without explicit approval
+- Do not commit secrets (`.env`, credentials, API keys) to git
+- Before staging files for a commit, verify they are inside the git repository root
+- Do not force-push to main/master
+- Run tests before claiming a fix works
+<!-- /DevOS:section:safety-rules -->
+
+<!-- DevOS:section:directory-structure -->
+## Key Directories
+
+- `src/` — source code
+- `tests/` — test files
+- `docs/` — documentation
+- `product/` — specs, planning, runtime (DevOS managed)
+- `.dev-os/` — DevOS project configuration
+<!-- /DevOS:section:directory-structure -->
+
+<!-- DevOS:section:compatibility-posture -->
+## Compatibility Posture
+
+- Temporary pre-launch rule. Remove or revise when this project goes live.
+- This project is not live yet and has no production customers.
+- Breaking changes are acceptable if they simplify the product or close correctness gaps.
+- Default to the best forward version, not backwards compatibility.
+- Treat unfinished, unused, or dead code as unbuilt features.
+- Prefer deletion or replacement over shims, adapters, compatibility layers, or legacy fallbacks.
+- Do not add legacy shims, compatibility layers, migrations, or old-contract support unless explicitly requested.
+<!-- /DevOS:section:compatibility-posture -->
+
+<!-- DevOS:section:devos-context -->
+## DevOS Context
+
+Reference these context files in every session:
+
+- `docs/context/DEVOS_CONTEXT_BUNDLE.md` — project summary, profile, version
+- `docs/context/DEVOS_CAPABILITIES_INDEX.md` — full capabilities inventory
+- `docs/context/DEVOS_PUBLIC_SURFACE.md` — user-facing commands and entry points
+- `docs/context/DEVOS_ARCHITECTURE.md` — system architecture and component relationships
+- `docs/context/codebase-map.md` — file tree with role annotations
+- `docs/context/DEVOS_OWNERSHIP_AUDIT.md` — who owns what across the codebase
+- `docs/context/DEVOS_DEFERRED_TOOLS.md` — deferred HTTP MCP servers
+- `docs/context/DEVOS_USER_FLOWS_STALENESS.md` — user flow freshness status
+- `.dev-os/runtime/context-refresh-state.json` (logical path; resolve via `scripts/lib/runtime-state.sh`)
+
+Already indexed in managed blocks below (no need to read separately):
+Skills index, Chains index, MCP index, Standards index, Workflows index
+<!-- /DevOS:section:devos-context -->
+
+<!-- DEVOS_CLAUDE_BRIEF_START -->
+## Claude Operating Brief
+
+Full guidance: `docs/context/DEVOS_PROJECT_GUIDANCE.md`
+
+- **Project Purpose:** Define the mission and product goals.
+- **Install Topology:** DevOS profile `general`; project config lives in `.dev-os/config.yml`.
+- **Tech Stack:** Primary implementation language is TypeScript.
+- **Development Commands:** Run tests with `pnpm run test`.
+- **Architecture Anchors:** `docs/context/codebase-map.md` describes file roles and hotspots; start there.
+- **Operating Rules:** Before removing or overwriting config files, create a backup first
+- **Gotchas:** No gotcha signal detected yet; record traps here as they surface.
+<!-- DEVOS_CLAUDE_BRIEF_END -->
 
 <!-- DEVOS_BUNDLE_INDEX_START -->
 ## Framework Bundle Index

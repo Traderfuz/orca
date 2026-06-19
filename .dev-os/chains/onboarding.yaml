@@ -1,0 +1,28 @@
+schema_version: 1
+id: onboarding
+name: Onboarding
+description: Initialize a new project with DevOS — install, plan, extract standards, and create profile.
+category: maintenance
+worktree_policy_exception: bootstrap
+skills:
+  - devos-init
+  - plan-product
+  - extract-standards
+  - create-custom-profile
+  - {name: commit, args: "--all"}
+confirm: false
+clients:
+  - claude-code
+  - codex
+  - gemini
+  - opencode
+  - pi
+  - zed
+intent_keywords:
+  - new project
+  - onboard
+  - setup project
+  - initialize project
+  - devos setup
+  - project init
+source_doc: docs/guides/chains.md

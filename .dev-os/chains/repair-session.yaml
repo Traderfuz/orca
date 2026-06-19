@@ -1,0 +1,27 @@
+schema_version: 1
+id: repair-session
+name: Repair Session
+description: Diagnose, fix, and devos-verify a broken work session.
+when_to_use: "Use when something is actively broken — tests fail, the build is red, a hook errors, or a skill invocation throws unexpected output. Distinct from convergence (systematic gap closure from a report) and maintenance-session (proactive health audit). Choose repair-session when: you have a specific breakage in hand, you want to diagnose root cause and fix it now, and you need verification that the fix holds."
+category: recovery
+skills:
+  - diagnose-first
+  - repair-hooks
+  - systematic-debugging
+  - quick-fix
+  - devos-verify
+  - {name: commit, args: "--all"}
+confirm: false
+clients:
+  - claude-code
+  - codex
+  - gemini
+  - opencode
+  - pi
+  - zed
+intent_keywords:
+  - repair
+  - debug
+  - broken
+  - fix
+source_doc: docs/guides/chains.md

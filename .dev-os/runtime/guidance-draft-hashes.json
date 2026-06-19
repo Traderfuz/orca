@@ -1,0 +1,12 @@
+{
+  "schema": "guidance-draft-hashes@v1",
+  "sections": {
+    "Project Purpose": "f96070ea36ca8b747e50416d16aac69fb03fd019279d93698eb3b0b540713229",
+    "Install Topology": "f9481e2027b4435dc68f99672d4807ab81abeed7f45943e3f6e36182f2408b7f",
+    "Tech Stack": "17af873d390604f9ebf200f9486f632b46bf5f8ccad54850c5728081268630ad",
+    "Development Commands": "109a3b18c94f90625262fa7185eeb07270570b66ebb4ace54b9bc95c3fb858c2",
+    "Architecture Anchors": "233cee99403403cfe2888ec181a9d21b7af023414eef25da8779481a1c7463aa",
+    "Operating Rules": "7e5e25886366325d7e316643056f8fed0f7486e16c8f7a8e353b1f6694d6c31f",
+    "Gotchas": "c75adad9f00832097d2be765b6b9c2826961202411fccc3f71d9883f0ea4fc38"
+  }
+}

@@ -1,0 +1,32 @@
+schema_version: 1
+id: release-onboarding
+name: Release Onboarding
+description: "First-time package/library release onboarding: initialize DevOS, audit dependencies, configure CI/CD release workflows, devos-verify tests and build, then publish only as the final onboarding action. For recurring pre-publish verification without publishing, use package-release-readiness."
+category: development
+confirm: false
+worktree_policy_exception: bootstrap-release
+model_route: standard
+clients:
+  - claude-code
+  - codex
+  - gemini
+  - opencode
+  - pi
+  - zed
+skills:
+  - devos-init
+  - audit-deps
+  - ci-setup
+  - harden
+  - {name: commit, args: "--all"}
+  - release
+intent_keywords:
+  - release onboarding
+  - first release setup
+  - setup package release
+  - configure package publishing
+  - configure release workflow
+  - CI release setup
+  - onboard package release
+  - new package release project
+  - release infrastructure setup

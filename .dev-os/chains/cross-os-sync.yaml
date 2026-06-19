@@ -1,0 +1,28 @@
+schema_version: 1
+id: cross-os-sync
+name: Cross-OS Sync
+description: Sync artifacts across all AI CLIs from an isolated worktree and devos-verify cross-OS handoff integrity.
+category: maintenance
+skills:
+  - {name: work-intake-preflight, args: "--auto"}
+  - worktrees
+  - cross-os-sync
+  - cross-os-verify
+  - generate-agents-md
+  - {name: commit, args: "--all"}
+confirm: false
+clients:
+  - claude-code
+  - codex
+  - gemini
+  - opencode
+  - pi
+  - zed
+intent_keywords:
+  - cross-os
+  - sync CLIs
+  - multi-cli sync
+  - cross os sync
+  - sync agents
+  - propagate agents
+source_doc: docs/guides/chains.md

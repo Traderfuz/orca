@@ -1,0 +1,27 @@
+schema_version: 1
+id: context-full-refresh
+name: Context Full Refresh
+description: Rebuild DevOS context artifacts after source or standards changes from an isolated worktree.
+category: maintenance
+skills:
+  - { name: work-intake-preflight, args: "--auto" }
+  - worktrees
+  - worktree-sessions
+  - context-full-refresh
+  - map
+  - generate-agents-md
+  - {name: commit, args: "--all"}
+confirm: false
+clients:
+  - claude-code
+  - codex
+  - gemini
+  - opencode
+  - pi
+  - zed
+intent_keywords:
+  - context
+  - refresh
+  - agents
+  - map
+source_doc: profiles/general/workflows/pipelines/context-full-refresh.md
